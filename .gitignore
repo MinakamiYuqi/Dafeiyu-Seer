@@ -1,0 +1,39 @@
+# 运行产物
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+
+# 缓存与生成文件
+cache/
+*.log
+
+# 备份（我们习惯带时间戳，很占地方）
+*.bak
+*.bak-*
+*.orig
+*.rej
+
+# 数据文件 —— 这些绝不进仓库
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.sqlite-journal
+manual_db/
+kb_backups/
+
+# 无头客户端的设备指纹（含机器标识，且每台机器不同）
+**/_xm/login_tail.txt
+
+# 凭据
+.credentials.yaml
+*.key.txt
+claude-key*.txt
+.env
+
+# 系统
+Thumbs.db
+desktop.ini
+.DS_Store

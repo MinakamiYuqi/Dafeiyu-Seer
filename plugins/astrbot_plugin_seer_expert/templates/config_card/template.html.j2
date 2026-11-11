@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style type="text/css">
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #16305c;
+    color: #ffffff;
+    font-family: "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  }
+  .wrap { display: flex; width: 1040px; }
+
+  /* ── 左栏 ── */
+  .left { width: 400px; background: linear-gradient(180deg,#1b3a6b,#122a52); }
+  .head-row { display: flex; padding: 8px; }
+  .head-img { width: 96px; height: 96px; object-fit: contain; }
+  .extra { flex: 1; padding-left: 8px; }
+  .sec-title {
+    font-size: 20px; font-weight: bold; color: #cfe6ff;
+    background: linear-gradient(90deg,#2f6fc4,#1d4f96);
+    padding: 4px 10px; letter-spacing: 1px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .sec-title .dia { color: #6fd0ff; }
+  .chk { font-size: 12px; color: #9fd0ff; margin-left: auto; }
+  .team-grid { display: flex; flex-wrap: wrap; padding: 6px 8px; }
+  .team-item { width: 50%; font-size: 14px; color: #d8e8ff; line-height: 22px; }
+  .team-item b { color: #4fd2ff; font-weight: normal; }
+  .bonus-title { font-size: 12px; color: #8fb8e8; padding: 0 8px 2px; text-align: right; }
+
+  .body-img-box { text-align: center; padding: 0; line-height: 0; }
+  .body-img { width: 360px; max-height: 330px; object-fit: contain; }
+  .pet-name {
+    text-align: center; font-size: 30px; font-weight: bold;
+    letter-spacing: 3px; padding: 6px 0 6px;
+    text-shadow: 0 2px 4px rgba(0,0,0,.6);
+  }
+  .equip { padding: 4px 14px 14px; }
+  .eq-line { display: flex; align-items: baseline; font-size: 15px; margin-bottom: 4px; }
+  .eq-label { color: #9fd0ff; width: 46px; flex: none; }
+  .eq-name { color: #ffffff; font-size: 17px; font-weight: bold; }
+  .eq-vals { display: flex; flex-wrap: wrap; margin-left: 46px; margin-bottom: 8px; }
+  .suit-box { display: flex; align-items: flex-start; gap: 10px; padding: 2px 0 4px; }
+  .suit-icon { width: 72px; height: 72px; object-fit: contain; flex: none; }
+  .suit-desc { flex: 1; font-size: 12px; color: #bcd6f5; line-height: 17px; max-height: 72px; overflow: hidden; }
+  .suit-desc b { color: #4fd2ff; font-weight: normal; }
+  .eq-v { width: 33%; font-size: 14px; color: #d8e8ff; line-height: 22px; }
+  .eq-v b { color: #4fd2ff; font-weight: normal; }
+
+  /* ── 右栏 ── */
+  .right { flex: 1; background: #16305c; padding-bottom: 4px;
+    display: flex; flex-direction: column; }
+  .base-grid { display: flex; flex-wrap: wrap; padding: 6px 20px 8px 16px; }
+  .base-item { width: 50%; font-size: 16px; color: #d8e8ff; line-height: 29px; }
+  .base-item b { color: #4fd2ff; font-weight: normal; }
+  .pvp-tag {
+    margin-left: auto; font-size: 13px; color: #fff;
+    background: #3d7fd6; padding: 2px 10px; border-radius: 3px;
+  }
+  .battle-grid { display: flex; flex-wrap: wrap; padding: 10px 20px 12px 16px; }
+  .battle-item { width: 50%; font-size: 22px; color: #d8e8ff; line-height: 42px; }
+  .battle-item .k { font-size: 17px; }
+  .battle-item .v { color: #4fd2ff; font-weight: bold; }
+  .battle-item .ev { font-size: 17px; color: #ffd76a; margin-left: 12px; }
+
+  .mm-row { display: flex; justify-content: space-around; align-items: flex-start;
+    padding: 10px 18px 8px; flex: 1; }
+  .mm-cell { width: 31%; text-align: center; }
+  .mm-icon {
+    width: 122px; height: 122px; object-fit: contain;
+    background: rgba(255,255,255,.06); border: 2px solid #2f5f9f; border-radius: 4px;
+  }
+  .mm-name { font-size: 16px; color: #eaf4ff; margin-top: 7px; line-height: 22px; }
+  .mm-vals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px 4px;
+    margin-top: 7px; padding: 0 2px; }
+  .mm-vals span { font-size: 14px; color: #cfe2f8; line-height: 20px; text-align: center; }
+  .mm-vals b { color: #4fd2ff; font-weight: normal; }
+  .mm-sum { font-size: 12px; color: #8fb8e0; margin-top: 3px; }
+  .mm-gem { margin-top: 7px; padding: 4px 6px; border-radius: 5px;
+    background: rgba(79,210,255,.10); border: 1px solid rgba(79,210,255,.28); }
+  .mm-gem .gname { font-size: 13px; color: #7fe0ff; }
+  .mm-gem .gskill { font-size: 12px; color: #ffd76a; }
+  .mm-gem .geff { font-size: 11px; color: #a8c8e8; line-height: 15px; margin-top: 2px; }
+  .mm-none { width: 122px; height: 122px; margin: 0 auto; border: 2px dashed #2f5f9f; border-radius: 4px; }
+
+  .foot { font-size: 13px; color: #8fb8e0; padding: 8px 16px; }
+  .foot.mascot-pad { padding-right: 128px; }
+  .foot-sum { font-size: 20px; color: #ffffff; font-weight: bold; padding: 10px 16px 2px; }
+  .foot-sum b { color: #4fd2ff; }
+  .foot-note { font-size: 15px; color: #a8c8e8; line-height: 23px; padding: 0 16px 3px; }
+  .foot-note b { color: #4fd2ff; font-weight: normal; }
+  .foot-block { padding-right: 128px; }
+  .foot:first-of-type { margin-top: auto; }
+  .mascot { position: absolute; right: 12px; bottom: 10px; width: 92px; height: 92px;
+    object-fit: cover; border-radius: 10px; opacity: .95;
+    box-shadow: 0 2px 8px rgba(0,0,0,.45); }
+  .right { position: relative; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ============ 左栏 ============ -->
+  <div class="left">
+    <div class="head-row">
+      {% if pet.head_img %}<img class="head-img" src="{{ pet.head_img }}">{% endif %}
+      <div class="extra">
+        <div class="sec-title"><span class="dia">◆</span>额外数值<span class="chk">✓特殊</span></div>
+        <div class="bonus-title">战队加成　　额外加成</div>
+        <div class="team-grid">
+          {% for t in extra.team %}
+          <div class="team-item">{{ t.cn }}：<b>{{ t.now }}/{{ t.max }}</b></div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <div class="body-img-box">
+      {% if pet.body_img %}<img class="body-img" src="{{ pet.body_img }}">{% endif %}
+    </div>
+    <div class="pet-name">{{ pet.name }}</div>
+
+    <div class="equip">
+      {% for eq in equipment_list %}
+      {% if eq.name %}
+      <div class="eq-line"><span class="eq-label">{{ eq.label }}：</span><span class="eq-name">{{ eq.name }}</span></div>
+      {% if eq.label == "套装" and eq.icon %}
+      <div class="suit-box">
+        <img class="suit-icon" src="{{ eq.icon }}">
+        <div class="suit-desc">{{ eq.short or eq.text }}</div>
+      </div>
+      {% endif %}
+      <div class="eq-vals">
+        {% for v in eq.vals %}<div class="eq-v">{{ v.cn }}<b>{{ v.val }}</b></div>{% endfor %}
+        {% if not eq.vals and eq.text and not eq.icon %}<div class="eq-v" style="width:100%">{{ eq.text }}</div>{% endif %}
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- ============ 右栏 ============ -->
+  <div class="right">
+    <div class="sec-title"><span class="dia">◆</span>基础属性
+      {% if extra.year_bonus %}<span class="chk">✓年费加成（全属性+10）</span>{% endif %}
+    </div>
+    <div class="base-grid">
+      <div class="base-item">等级：<b>{{ base.level }}</b></div>
+      <div class="base-item">学习力：<b>{{ base.ev_total }}</b></div>
+      <div class="base-item">天赋：<b>{{ base.talent }}</b></div>
+      <div class="base-item">体力上限：<b>{{ base.hpup }}</b></div>
+      <div class="base-item">性格：<b>{{ base.nature }}</b></div>
+      <div class="base-item">特性：<b>{{ base.ability }}</b></div>
+    </div>
+
+    <div class="sec-title"><span class="dia">◆</span>战斗属性<span class="pvp-tag">PVP</span></div>
+    <div class="battle-grid">
+      {% for b in battle %}
+      <div class="battle-item">
+        <span class="k">{{ b.cn }}：</span><span class="v">{{ b.value }}</span><span class="ev">{{ b.ev }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="sec-title"><span class="dia">◆</span>装备刻印</div>
+    <div class="mm-row">
+      {% for m in mintmarks %}
+      <div class="mm-cell">
+        {% if m.icon %}<img class="mm-icon" src="{{ m.icon }}">{% else %}<div class="mm-none"></div>{% endif %}
+        <div class="mm-name">{{ m.name }}</div>
+        {% if m.vals_list %}
+        <div class="mm-vals">
+          {% for v in m.vals_list %}<span>{{ v.cn }}<b>{{ v.val }}</b></span>{% endfor %}
+        </div>
+        {% endif %}
+        {% if m.gem %}
+        <div class="mm-gem">
+          <div class="gname">◆ {{ m.gem.name }}{% if m.gem.skill %} <span class="gskill">→ {{ m.gem.skill }}</span>{% endif %}</div>
+          {% if m.gem.effect %}<div class="geff">{{ m.gem.effect }}</div>{% endif %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if warn %}
+    <div class="foot">⚠ {{ warn|join('；') }}</div>
+    {% endif %}
+    <div class="foot-sum foot-block">六项和：<b>{{ total }}</b></div>
+    {% if extra_line %}
+    <div class="foot-note foot-block">{{ extra_line }}</div>
+    {% endif %}
+    {% for nt in notes %}
+    {% if nt.startswith('__CONT__') %}
+    <div class="foot-note foot-block" style="padding-left:34px">{{ nt[8:] }}</div>
+    {% else %}
+    <div class="foot-note foot-block">· {{ nt }}</div>
+    {% endif %}
+    {% endfor %}
+    {% if mascot %}<img class="mascot" src="{{ mascot }}">{% endif %}
+  </div>
+
+</div>
+</body>
+</html>

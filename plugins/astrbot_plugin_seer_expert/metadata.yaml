@@ -1,0 +1,10 @@
+name: astrbot_plugin_seer_expert
+display_name: 赛尔知识库
+author: 大肥鱼
+desc: 直接读 SeerAPI 本地库的赛尔号专家：精灵/技能/魂印/异常状态/属性克制/伤害估算，不懂就问并记住答案。
+version: 0.1.0
+astrbot_version: ">=4.10.0"
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - telegram

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #0d1226;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    display: inline-block;
+    padding: 18px 20px 22px;
+    background: linear-gradient(160deg, #131a35 0%, #0d1226 100%);
+  }
+
+  /* ── 顶部 ── */
+  .head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .head .id { font-size: 25px; font-weight: 700; color: #e8ecf8; letter-spacing: .5px; }
+  .head .id b { color: #6eaaff; font-weight: 700; }
+  .head .meta { font-size: 12px; color: #8f9cbf; }
+
+  /* ── 分区 ── */
+  .section { margin-top: 14px; }
+  .sec-title {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 17px; font-weight: 700; margin-bottom: 10px;
+  }
+  .sec-title .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .sec-title .cnt { font-size: 13px; font-weight: 400; color: #8f9cbf; }
+  .sec-atk .dot { background: #ffd666; box-shadow: 0 0 10px #ffd66699; }
+  .sec-atk .txt { color: #ffd666; }
+  .sec-sby .dot { background: #6eaaff; box-shadow: 0 0 10px #6eaaff99; }
+  .sec-sby .txt { color: #6eaaff; }
+
+  /* ── 网格 ── */
+  .grid { display: grid; grid-template-columns: repeat(3, 152px); gap: 13px; }
+
+  .card {
+    position: relative;
+    width: 152px; height: 192px;
+    border-radius: 11px;
+    background: linear-gradient(170deg, #1c2850 0%, #16203e 100%);
+    border: 1.5px solid #3a4e8c;
+    overflow: hidden;
+  }
+  .card.first { border-color: #ffd666; box-shadow: 0 0 14px #ffd66644; }
+  .card .avatar {
+    width: 152px; height: 136px;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 50% 40%, #243259 0%, #16203e 72%);
+    overflow: hidden;
+  }
+  .card .avatar img {
+    width: 136px; height: 136px;
+    object-fit: contain;
+    image-rendering: -webkit-optimize-contrast;
+  }
+  .card .avatar .ph { font-size: 12px; color: #5a6a99; }
+
+  .card .bar {
+    height: 56px; padding: 5px 8px 0;
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .card .row1 { display: flex; justify-content: space-between; align-items: center; }
+  .card .lv { font-size: 12px; color: #b9c4e0; font-weight: 700; }
+  .card .badge {
+    font-size: 10px; font-weight: 700; color: #1a1f33;
+    background: #ffd666; border-radius: 4px; padding: 1px 5px;
+  }
+  .card .nm {
+    font-size: 13px; color: #eef2ff; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    line-height: 1.35; padding-bottom: 2px;
+  }
+
+  /* ── 装饰条（照抄游戏外观：固定绿黄渐变，不代表任何数据）── */
+  .typebar {
+    height: 6px;
+    border-radius: 3px;
+    margin-top: 3px;
+    background: linear-gradient(90deg, #58c964 0%, #a8d84e 45%, #f0d060 100%);
+  }
+
+  /* 皮肤角标 */
+  .skin-tag {
+    position: absolute; top: 6px; right: 6px;
+    font-size: 9px; color: #ffd666;
+    background: #ffd66622; border: 1px solid #ffd66677;
+    border-radius: 4px; padding: 1px 4px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head">
+    <div class="id">米米号 <b>{{ target }}</b>{% if nick %}<span style="font-size:15px;color:#8f9cbf;">（{{ nick }}）</span>{% endif %}</div>
+    <div class="meta">阵容获取 {{ time }}</div>
+  </div>
+
+  {% if attack %}
+  <div class="section sec-atk">
+    <div class="sec-title"><span class="dot"></span><span class="txt">出战精灵</span><span class="cnt">共 {{ attack|length }} 只</span></div>
+    <div class="grid">
+      {% for p in attack %}
+      <div class="card{% if p.useFlag == 2 %} first{% endif %}">
+        <div class="avatar">
+          {% if p.head %}<img src="{{ p.head }}" alt="">{% else %}<span class="ph">无头像</span>{% endif %}
+        </div>
+        {% if p.skinId and p.skinId < 100000 %}<div class="skin-tag">皮</div>{% endif %}
+        <div class="bar">
+          <div class="row1">
+            <span class="lv">Lv.{{ p.level }}</span>
+            {% if p.useFlag == 2 %}<span class="badge">首发</span>{% endif %}
+          </div>
+          <div class="nm">{{ p.name }}</div>
+          <div class="typebar"></div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if standby %}
+  <div class="section sec-sby">
+    <div class="sec-title"><span class="dot"></span><span class="txt">待命精灵</span><span class="cnt">共 {{ standby|length }} 只</span></div>
+    <div class="grid">
+      {% for p in standby %}
+      <div class="card">
+        <div class="avatar">
+          {% if p.head %}<img src="{{ p.head }}" alt="">{% else %}<span class="ph">无头像</span>{% endif %}
+        </div>
+        {% if p.skinId and p.skinId < 100000 %}<div class="skin-tag">皮</div>{% endif %}
+        <div class="bar">
+          <div class="row1"><span class="lv">Lv.{{ p.level }}</span></div>
+          <div class="nm">{{ p.name }}</div>
+          <div class="typebar"></div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+</body>
+</html>

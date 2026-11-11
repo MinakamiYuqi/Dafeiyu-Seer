@@ -1,0 +1,148 @@
+{
+  "enable": {
+    "type": "bool",
+    "description": "启用插件",
+    "default": true,
+    "hint": "关掉后本插件完全不介入任何消息。"
+  },
+  "require_at": {
+    "type": "bool",
+    "description": "必须 @ 机器人",
+    "default": true,
+    "hint": "开启时只有 @ 了机器人的消息才会转给 DSH。关掉会变成「只要带赛尔关键词就接管」，很容易乱接话。"
+  },
+  "require_keyword": {
+    "type": "bool",
+    "description": "必须命中赛尔关键词",
+    "default": true,
+    "hint": "@ 了机器人还要带赛尔词才转 DSH；@ 但聊别的仍走 AstrBot 原流程。"
+  },
+  "keywords": {
+    "type": "text",
+    "description": "赛尔关键词（逗号或换行分隔）",
+    "default": "",
+    "hint": "留空用内置词表：赛尔/精灵/魂印/技能/属性/克制/伤害/连击/先制/本系/专属/特性/宝石/刻印/第五/巅峰/对战/精灵王/进化/种族值/威力"
+  },
+  "enable_group": {
+    "type": "bool",
+    "description": "在群聊生效",
+    "default": true
+  },
+  "enable_private": {
+    "type": "bool",
+    "description": "在私聊生效",
+    "default": false
+  },
+  "allow_groups": {
+    "type": "text",
+    "description": "群白名单（留空=全部群）",
+    "default": "",
+    "hint": "填群号，逗号或空格分隔。只在这些群里接管。"
+  },
+  "dsh_home": {
+    "type": "string",
+    "description": "DSH_HOME 路径",
+    "default": "",
+    "hint": "必须是干净的独立实例：不要带 prompt-inject.md、不要装破甲类插件。"
+  },
+  "dsh_cwd": {
+    "type": "string",
+    "description": "DSH 工作目录",
+    "default": "",
+    "hint": "seer-cli 要在这个目录下（agent 会跑 seer-cli\\seer.py）。"
+  },
+  "dsh_profile": {
+    "type": "string",
+    "description": "DSH profile",
+    "default": "sdk-minimal",
+    "hint": "sdk-minimal 是随附的精简 profile（shell + read_image + cwd，带自动压缩）。一般不用改。"
+  },
+  "api_key": {
+    "type": "string",
+    "description": "DeepSeek API Key",
+    "default": "",
+    "hint": "会作为 DEEPSEEK_API_KEY 传给 DSH 子进程。直接填 AstrBot 里那个 DeepSeek 的 key 即可。"
+  },
+  "provider": {
+    "type": "string",
+    "description": "模型提供方",
+    "default": "deepseek-official",
+    "hint": "sdk-minimal 只认这个 provider 名（大小写、连字符都要一致）。"
+  },
+  "model": {
+    "type": "string",
+    "description": "模型",
+    "default": "deepseek-flash",
+    "hint": "deepseek-flash 快；要更稳可以换 deepseek-chat 之类（需该 provider 支持）。"
+  },
+  "reasoning_effort": {
+    "type": "string",
+    "description": "推理强度",
+    "default": "low",
+    "options": [
+      "",
+      "low",
+      "medium",
+      "high"
+    ],
+    "hint": "只能是 off / low / high / max（DeepSeek 不支持 medium，填别的会 initialize 失败）。off 最快但不会推理，low 平衡，high 原来的默认，max 最慢最强。"
+  },
+  "max_tokens": {
+    "type": "int",
+    "description": "单次输出上限（0=用默认）",
+    "default": 0
+  },
+  "timeout_seconds": {
+    "type": "int",
+    "description": "单次问答超时（秒）",
+    "default": 150,
+    "hint": "DSH 要跑好几次工具调用，别设太小。群里超过这个时间会回一句超时提示。"
+  },
+  "notify_waiting": {
+    "type": "bool",
+    "description": "先发一句「查询中」",
+    "default": true,
+    "hint": "DSH 要跑多次工具，通常 30~180 秒。开启后先回一句占位提示，避免群里以为没反应。"
+  },
+  "waiting_hint": {
+    "type": "string",
+    "description": "占位提示文本",
+    "default": "（查库中，稍等）"
+  },
+  "system_prompt_file": {
+    "type": "string",
+    "description": "system prompt 文件路径",
+    "default": "",
+    "hint": "留空则用 DSH_HOME/system-prompt.md。内容会注入 DSH_SYSTEM_PROMPT 环境变量（sdk-minimal 只认这个）。"
+  },
+  "rephrase": {
+    "type": "bool",
+    "description": "让聊天模型复述 DSH 结论",
+    "default": true,
+    "hint": "开：DSH 出技术结论后交给你自己的聊天模型复述一遍，身份和口吻统一、历史里也认得出是自己说的。关：直接发 DSH 原文。"
+  },
+  "rephrase_prompt": {
+    "type": "text",
+    "description": "复述用的 system prompt",
+    "default": "",
+    "hint": "留空用插件内置的。内置版要求数值照抄、不许加客套、不许自称模型。"
+  },
+  "prewarm": {
+    "type": "bool",
+    "description": "插件加载时预热 DSH 进程",
+    "default": true,
+    "hint": "开：启动后先在后台把 DSH 拉起来握手，省掉第一条消息 2~4 秒冷启动。关：延迟到第一条消息再起。"
+  },
+  "follow_up_seconds": {
+    "type": "int",
+    "description": "追问窗口（秒）",
+    "default": 180,
+    "hint": "上次 DSH 答完后这么多秒内的 @ 消息，即使不含精灵名/关键词也交给 DSH——同一个 session 能接着上文回答「那速度呢」。置 0 关闭。"
+  },
+  "auto_takeover": {
+    "type": "bool",
+    "description": "自动接管（抢答）",
+    "default": false,
+    "hint": "关（推荐）：聊天模型自己决定何时调 seer_query 工具，语气连贯、不割裂。开：命中关键词就由插件直接接管抢答，DSH 原文风格。"
+  }
+}

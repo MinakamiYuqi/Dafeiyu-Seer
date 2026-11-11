@@ -1,0 +1,10 @@
+name: astrbot_plugin_seer_dsh
+display_name: 赛尔号·DSH 深度问答
+author: 大肥鱼
+desc: 把 @bot 的赛尔号问题转给 DSH agent：它会自己查库、算数、发现错了再重算，然后回一句话。
+version: 0.1.0
+astrbot_version: ">=4.10.0"
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - telegram
