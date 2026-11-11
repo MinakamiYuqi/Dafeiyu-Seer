@@ -1,0 +1,102 @@
+{
+  "seer_db_path": {
+    "type": "string",
+    "description": "SeerAPI 本地库路径",
+    "hint": "留空则自动使用 plugin_data/astrbot_plugin_seer_info/seerapi.sqlite。",
+    "default": ""
+  },
+  "max_skills": {
+    "type": "int",
+    "description": "查询精灵时最多列出的技能数",
+    "default": 8,
+    "hint": "太多会把上下文撑大，建议 6~10。"
+  },
+  "ask_when_unknown": {
+    "type": "bool",
+    "description": "查不到时主动向玩家询问",
+    "hint": "开启后，工具返回「未收录」并提示模型去问人，答案可用 seer_remember 落库。",
+    "default": true
+  },
+  "summary_enabled": {
+    "type": "bool",
+    "description": "对问过的魂印/技能做学习总结",
+    "default": true,
+    "hint": "开启后，首次查询会用一次小调用把它压成结构化结论并缓存，之后直接复用。"
+  },
+  "summary_only_private": {
+    "type": "bool",
+    "description": "只在私聊里触发总结",
+    "default": true,
+    "hint": "群里查询只返回原文，不消耗总结调用；私聊问到的才学习。"
+  },
+  "rules_max_chars": {
+    "type": "int",
+    "description": "解析节点清单注入的最大字数",
+    "default": 1200
+  },
+  "focus_minutes": {
+    "type": "int",
+    "description": "专注模式默认时长（分钟）",
+    "default": 30
+  },
+  "focus_strip_patterns": {
+    "type": "text",
+    "description": "专注模式下要过滤掉的注入内容（每行一个关键词）",
+    "default": "【群内用语表】\n【当前消息涉及的词】\n多样性\n表达模式\n好感度\n社交上下文",
+    "hint": "命中任一关键词的附加内容会被丢弃，避免其他插件干扰机制判断。"
+  },
+  "strict_source": {
+    "type": "bool",
+    "description": "赛尔话题禁止联网搜索",
+    "default": true,
+    "hint": "开启后，涉及赛尔号的消息会强制走本地库工具，禁止调用联网搜索或凭记忆作答。"
+  },
+  "dual_type_mode": {
+    "type": "string",
+    "description": "双属性克制合成方式",
+    "default": "seer",
+    "options": [
+      "seer",
+      "multiply",
+      "max",
+      "average"
+    ],
+    "hint": "seer=复刻伤害计算器1.1的规则（单双属性取平均、双双×2→×4、含0→sum/4、四组合=sum/4+每项×2加0.5）；multiply=全部相乘；max=取最大；average=取平均。"
+  },
+  "dual_type_cap": {
+    "type": "int",
+    "description": "双属性克制倍率上限（0=不封顶）",
+    "default": 0,
+    "hint": "相乘可能出现 ×8/×16 这种离谱值。填 4 表示最多 ×4，0 表示不限制。"
+  },
+  "attach_icon": {
+    "type": "bool",
+    "description": "名词/魂印回复附带图标",
+    "default": true,
+    "hint": "库里存了魂印图标的 PNG 原图（2253 条），开启后 /名词 会先发图标再发文字。"
+  },
+  "seer_account": {
+    "type": "string",
+    "description": "游戏内查询用的服务账号（米米号）",
+    "hint": "查战绩/阵容要登录游戏，必须用专用小号。留空则读环境变量 SEER_ACCOUNT。同一账号只能一个在线，别和自己在玩的号共用。",
+    "default": ""
+  },
+  "seer_password": {
+    "type": "string",
+    "description": "服务账号密码",
+    "hint": "留空则读环境变量 SEER_PASSWORD。只在内存里用，不写日志、不落盘。",
+    "default": ""
+  },
+  "manual_sync_enabled": {
+    "type": "bool",
+    "description": "定时同步手册库（manual_db）",
+    "default": true,
+    "hint": "开启后后台每轮自动从「火の辞典」拉最新手册包。原先只能靠 bot 命令触发，实测曾静默滞后三天，新词条（如「神魂之器」）查不到。"
+  },
+  "manual_sync_hours": {
+    "type": "int",
+    "description": "手册库同步间隔（小时）",
+    "default": 24,
+    "hint": "默认每天一次，启动后延迟 10 分钟跑首轮。上游大约 2~3 天发一次新包，调太小只是白跑。"
+  }
+}

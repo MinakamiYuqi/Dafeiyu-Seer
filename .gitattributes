@@ -1,0 +1,16 @@
+# 统一用 LF，避免 Windows/Linux 协作时整文件 diff
+* text=auto eol=lf
+
+# 二进制
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# 这些必须保持原样（程序会解析）
+*.sqlite binary
+*.db binary
