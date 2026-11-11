@@ -11,12 +11,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 import urllib.request
 from pathlib import Path
 
-INSTANCE = Path(r"G:\temp\instances\eb74352a-db17-4359-aade-ba98505d2e47")
+INSTANCE = _find_astrbot_instance()
 DATA = INSTANCE / "core" / "data" / "plugin_data"
 INFO = DATA / "astrbot_plugin_seer_info"
 EXPERT = DATA / "astrbot_plugin_seer_expert"
@@ -27,6 +28,26 @@ LOCAL_ONLY = {
     "kb.sqlite": ("pet_build", "facts", "pet_alias"),
 }
 
+
+
+def _find_astrbot_instance() -> Path:
+    """定位 AstrBot 实例根目录。
+
+    优先级：环境变量 ASTRBOT_INSTANCE / ASTRBOT_ROOT → 从本文件位置向上找。
+    找不到时明确报错，而不是悄悄用一条只对某台机器有效的绝对路径。
+    """
+    for var in ("ASTRBOT_INSTANCE", "ASTRBOT_ROOT"):
+        env = os.environ.get(var)
+        if env and Path(env).is_dir():
+            return Path(env)
+    cur = Path(__file__).resolve().parent
+    for _ in range(6):
+        if (cur / "core" / "data" / "plugin_data").is_dir():
+            return cur
+        cur = cur.parent
+    raise RuntimeError(
+        "找不到 AstrBot 实例目录：请设置环境变量 ASTRBOT_INSTANCE 指向实例根路径"
+    )
 
 def sha256(path: Path) -> str:
     h = hashlib.sha256()

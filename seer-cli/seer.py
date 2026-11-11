@@ -35,13 +35,35 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_CANDIDATES = [
     # ★ 运行中的插件目录放第一位：验证必须验「群里实际跑的那份」，
     #   否则会出现「改了 A 却验了 B、两边悄悄分叉」的事故（2026-11-02 踩过）。
-    r"G:\temp\instances\eb74352a-db17-4359-aade-ba98505d2e47\core\data\plugins\astrbot_plugin_seer_expert",
     os.path.join(HERE, "..", "astrbot_plugin_seer_expert"),
     r"G:\dsh workspace\astrbot_plugin_seer_expert",
 ]
-DATA_CANDIDATES = [
-    r"G:\temp\instances\eb74352a-db17-4359-aade-ba98505d2e47\core\data\plugin_data",
-]
+def _candidate_data_dirs() -> list[str]:
+    """数据目录候选：SEER_DATA_DIR → 从本文件位置向上找 core/data/plugin_data。"""
+    out: list[str] = []
+    env = os.environ.get("SEER_DATA_DIR", "").strip()
+    if env:
+        out.append(env)
+    cur = HERE
+    for _ in range(6):
+        cand = os.path.join(cur, "core", "data", "plugin_data")
+        if os.path.isdir(cand):
+            out.append(cand)
+            break
+        cur = os.path.dirname(cur)
+
+    # 开发环境常见布局：seer-cli 在工作区，实例在 <工作区同级>/temp/instances/<id>/
+    for base in (os.path.dirname(HERE), os.path.dirname(os.path.dirname(HERE))):
+        inst_root = os.path.join(base, "temp", "instances")
+        if os.path.isdir(inst_root):
+            for inst in sorted(os.listdir(inst_root)):
+                cand = os.path.join(inst_root, inst, "core", "data", "plugin_data")
+                if os.path.isdir(cand):
+                    out.append(cand)
+    return out
+
+
+DATA_CANDIDATES = _candidate_data_dirs()
 
 
 def _find_plugin_dir() -> str:

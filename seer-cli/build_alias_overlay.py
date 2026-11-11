@@ -5,11 +5,12 @@ overlay 与上游 aliases.sqlite 分开存：
   aliases.sqlite              ← 上游原样（会被自动更新覆盖）
   aliases_local_overlay.sqlite ← 自用别名（更新时由 sqlite 合并回来，不会被丢）
 """
+import os
 import sqlite3
 import sys
 from pathlib import Path
 
-BASE = Path(r"G:\temp\instances\eb74352a-db17-4359-aade-ba98505d2e47\core\data\plugin_data\astrbot_plugin_seer_info")
+BASE = Path(os.environ.get("ASTRBOT_INSTANCE") or os.environ.get("ASTRBOT_ROOT") or ".") / "core" / "data" / "plugin_data"
 LIVE = BASE / "aliases.sqlite"
 OVERLAY = BASE / "aliases_local_overlay.sqlite"
 TABLES = ("mintmark_aliases", "mintmark_class_aliases", "mintmark_series_members")

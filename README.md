@@ -6,12 +6,20 @@
 
 | 路径 | 作用 |
 |---|---|
-| `plugins/astrbot_plugin_seer_expert` | 主体。32 个查询工具，覆盖精灵 / 技能 / 魂印 / 套装 / 刻印 / 伤害计算 / 先手判定，并自带三个数据源的更新逻辑 |
-| `plugins/astrbot_plugin_seer_dsh` | 桥接层。把消息转给 DSH（DeepSeek Harness）跑 agent，支持多群并发 |
+| `plugins/astrbot_plugin_seer_expert` | 查询主力。32 个工具，覆盖精灵 / 技能 / 魂印 / 套装 / 刻印 / 伤害计算 / 先手判定，自带三个数据源的更新逻辑 |
+| `plugins/astrbot_plugin_seer_info` | 数据层 + 群友互动（奶龙图库、配置图上传）。改造自 `MengNianxiaoyao` 的 GPL v3 项目，详见其 `NOTICE.md` |
 | `seer-cli/seer.py` | 独立命令行查询器，人和 agent 都能用，不依赖 AstrBot |
 
-> **不包含** `astrbot_plugin_seer_info`。早期数据层用的是 `MengNianxiaoyao/astrbot_plugin_seer_info`（GPL v3）的改造版，
-> 现在已经把需要的数据同步逻辑全部内建进 `seer_expert`，不再依赖它。
+**两个插件互不依赖，装哪个都能用**：
+
+```
+只想查数据        → 装 seer_expert 就够（它自己同步 seerapi / aliases / manual_db）
+还想要奶龙和配置图 → 再装 seer_info
+两个都装          → 数据文件共享同一份，不会重复下载
+```
+
+> 早先还有一个 `seer_dsh`（把难题转给 DSH agent）。实测下来和直接问 bot 拉不开差距，
+> 还多一层 150 秒超时风险，已经移除。
 
 ## 三个数据源
 

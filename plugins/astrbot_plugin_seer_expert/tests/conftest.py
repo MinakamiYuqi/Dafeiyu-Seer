@@ -22,9 +22,34 @@ PLUGIN_DIR = TESTS_DIR.parent
 if str(PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(PLUGIN_DIR))
 
-DEFAULT_DATA_DIR = Path(
-    r"G:\temp\instances\eb74352a-db17-4359-aade-ba98505d2e47\core\data\plugin_data"
-)
+def _default_data_dir() -> Path:
+    """定位 AstrBot 的 plugin_data 目录。
+
+    优先级：SEER_DATA_DIR → 从插件目录向上找 core/data/plugin_data。
+    仓库里不写死任何一台机器的绝对路径。
+    """
+    env = os.environ.get("SEER_DATA_DIR", "").strip()
+    if env:
+        return Path(env)
+    cur = PLUGIN_DIR
+    for _ in range(6):
+        cand = cur / "core" / "data" / "plugin_data"
+        if cand.is_dir():
+            return cand
+        cur = cur.parent
+
+    # 开发环境常见布局：插件在工作区，实例在 <工作区同级>/temp/instances/<id>/
+    for base in (PLUGIN_DIR.parent, PLUGIN_DIR.parent.parent):
+        inst_root = base / "temp" / "instances"
+        if inst_root.is_dir():
+            for inst in sorted(inst_root.iterdir()):
+                cand = inst / "core" / "data" / "plugin_data"
+                if cand.is_dir():
+                    return cand
+    return PLUGIN_DIR.parent
+
+
+DEFAULT_DATA_DIR = _default_data_dir()
 
 
 def _resolve_data_dir() -> Path:

@@ -7517,9 +7517,6 @@ class SeerKnowledge:
             cands.append(os.path.join(base, "manual_db", f"{name}.db"))
         except Exception:
             pass
-        cands.append(
-            os.path.join(r"G:\temp\instances\eb74352a-db17-4359-aade-ba98505d2e47\core\data\plugin_data\astrbot_plugin_seer_expert\manual_db", f"{name}.db")
-        )
         for c in cands:
             if c and os.path.isfile(c):
                 try:
@@ -8170,7 +8167,6 @@ class SeerKnowledge:
         except Exception:
             pass
         cands.append(
-            r"G:\temp\instances\eb74352a-db17-4359-aade-ba98505d2e47\core\data\plugin_data\astrbot_plugin_seer_info\seerapi.sqlite"
         )
         for c in cands:
             if not c:

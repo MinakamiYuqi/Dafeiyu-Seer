@@ -47,7 +47,6 @@ class SeerExpertPlugin(Star):
             os.path.join(data_root, "astrbot_plugin_seer_info", "seerapi.sqlite"),
             os.path.join(self.data_dir, "..", "astrbot_plugin_seer_info", "seerapi.sqlite"),
             os.path.join(here, "..", "..", "plugin_data", "astrbot_plugin_seer_info", "seerapi.sqlite"),
-            r"G:\temp\instances\eb74352a-db17-4359-aade-ba98505d2e47\core\data\plugin_data\astrbot_plugin_seer_info\seerapi.sqlite",
         ]
         seer_path = next(
             (c for c in candidates if c and os.path.isfile(os.path.abspath(c))),
@@ -147,7 +146,11 @@ class SeerExpertPlugin(Star):
         await asyncio.sleep(self._DATA_SYNC_FIRST_DELAY)
         while True:
             try:
-                res = await sync_data(self.data_dir)
+                # 下到「实际被读取的那个目录」。seerapi 可能在
+                # plugin_data/astrbot_plugin_seer_info/ 下（见 __init__ 的 candidates），
+                # 用 self.data_dir 会下到 expert 目录，下完也没人读。
+                seer_dir = os.path.dirname(os.path.abspath(self.kb.seer_path))
+                res = await sync_data(seer_dir)
                 for k, v in res.items():
                     if any(x in v for x in ("failed", "失", "未通过", "丢弃", "跳过")):
                         logger.warning("[data_sync] %s -> %s", k, v)
