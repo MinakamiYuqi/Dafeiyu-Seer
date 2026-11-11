@@ -17,16 +17,17 @@ AstrBot 插件市场的赛尔号插件
          https://github.com/Murmansk5000/IronsBot
 ```
 
-**`astrbot_plugin_seer_info` 不在本仓库里**，它由第三方（GPL v3）改造而来，版权归原作者，
-不在我们有权开源的范围。本仓库只包含我们自己写的部分。
+**`astrbot_plugin_seer_info` 已包含在本仓库里**，作为对原项目的 GPL v3 改造版，
+按 GPL v3 要求保留版权、同协议分发、说明改动（见该目录的 `NOTICE.md` 与 `LICENSE`）。
 
 ## 二、本仓库的原创部分
 
 | 目录 | 原创性 |
 |---|---|
 | `plugins/astrbot_plugin_seer_expert` | 从零写起。32 个查询工具、伤害口径、必先判定、facts 检索、数据同步逻辑 |
-| `plugins/astrbot_plugin_seer_dsh` | 从零写起。DSH 桥接、多群并发路由 |
 | `seer-cli/seer.py` | 从零写起 |
+
+（早先还有一个 `seer_dsh`，实测与直接问 bot 拉不开差距，已从仓库移除。）
 
 但**其中若干设计与数据来源来自下面这些人**。
 
@@ -107,7 +108,7 @@ oldml：saixiaoxi 无头登录参考
 游戏数据（精灵 / 技能 / 魂印 / 数值）    © 上海淘米网络
 seerapi 数据包                          Murmansk-Seer
 别名库                                  Murmansk5000/IronsBot
-手册词条（manual_db）                    SeerFire/update_cnb（数据源地址由分析其 APK 得出）
+手册词条（manual_db）                    火火（Yogurt114514）
 玩家结论（kb.sqlite）                    本群群友的实测与整理
 ```
 

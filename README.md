@@ -133,7 +133,7 @@ python seer-cli/seer.py raw "select count(*) from facts"
 ```
 AstrBot 插件市场的赛尔号插件（MengNianxiaoyao，GPL v3）
   → 参考 Nattsu39/IronsBot
-  → 我们的改造版（不在本仓库）
+  → 我们的改造版（即本仓库的 seer_info）
   → 后续功能参考 Murmansk5000/IronsBot
   → 无头客户端线索来自其鸣谢名单（SeerRadar / oldml）
 ```
@@ -142,7 +142,16 @@ AstrBot 插件市场的赛尔号插件（MengNianxiaoyao，GPL v3）
 
 ## 许可
 
-本项目为自用工具，未声明许可证。
+本仓库整体遵循 **GNU GPL v3**（见 [LICENSE](LICENSE)）——
+因为包含 `astrbot_plugin_seer_info`，它是对 `MengNianxiaoyao` 项目的 GPL v3 改造版。
+
+```
+seer_info     GPL v3（原作者 MengNianxiaoyao + 我们的修改）
+seer_expert   GPL v3（同一仓库，同协议分发）
+seer-cli      GPL v3
+```
+
+**再分发时**：保留 `LICENSE` 与各目录的 `NOTICE.md`，你的版本也用 GPL v3，并说明相对上游改了什么。
 
 引用的数据版权归原出处：游戏数据 © 淘米，seerapi 数据包来自 Murmansk-Seer，
-别名库来自 Murmansk5000/IronsBot，手册词条来自 SeerFire，玩家结论来自本群群友。
+别名库来自 Murmansk5000/IronsBot，手册词条来自火火（Yogurt114514），玩家结论来自本群群友。
