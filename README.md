@@ -9,6 +9,7 @@
 | `plugins/astrbot_plugin_seer_expert` | 查询主力。32 个工具，覆盖精灵 / 技能 / 魂印 / 套装 / 刻印 / 伤害计算 / 先手判定，自带三个数据源的更新逻辑 |
 | `plugins/astrbot_plugin_seer_info` | 数据层 + 群友互动（奶龙图库、配置图上传）。改造自 `MengNianxiaoyao` 的 GPL v3 项目，详见其 `NOTICE.md` |
 | `seer-cli/seer.py` | 独立命令行查询器，人和 agent 都能用，不依赖 AstrBot |
+| `plugins/astrbot_plugin_seer_expert/_xm/login_tail.txt` | 无头登录必需的协议尾巴，仓库自带；详见[文末说明](#关于-_xmlogin_tailtxt) |
 
 **两个插件互不依赖，装哪个都能用**：
 
@@ -94,7 +95,9 @@
 
 `seer_pvp` / `seer_roster` 走无头客户端直连游戏服务器，需要：
 
-1. `_xm/login_tail.txt`（492 字节的设备指纹，**每台机器不同，仓库不提供**）
+1. `_xm/login_tail.txt` —— **仓库里已经带了**（984 字符 hex，解码 492 字节）。
+   内容是 `taomee` + `unity_app_taomee` + `com.taomee.seer.mobile` + 设备型号，
+   不含账号密码，直接用就行。Temp 目录被清时 `seer_pvp` 会自动从 `_xm/` 复制回去。
 2. 一个专用小号的米米号密码，通过环境变量给：
 
 ```powershell
@@ -125,6 +128,9 @@ python seer-cli/seer.py raw "select count(*) from facts"
 - **`raw` 命令默认只连 kb 库**，查游戏数据要加 `--db seerapi`
 - **皮肤头像会缺**：上游对部分皮肤不单独出图（新机体复用老机体），
   取图时按 `皮肤 → 同名皮肤 → 同名精灵 → 本体` 四级回退
+- **`_xm/login_tail.txt` 不能排除**：它曾被当成「机器指纹」写进 .gitignore 和
+  build_repo.py 的排除表，结果分享包缺文件、别人装完 `seer_pvp` 直接跑不起来。
+  实际内容只有协议常量 + 设备型号，公开无风险。
 
 ## 来源与致谢
 
