@@ -24,8 +24,10 @@ cache/
 manual_db/
 kb_backups/
 
-# 无头客户端的设备指纹（含机器标识，且每台机器不同）
-**/_xm/login_tail.txt
+# 无头客户端的登录尾巴：**必须随包分发**，否则 Temp 被清后无法自愈。
+# 内容是协议常量 + 设备型号（NitroAN515-55），不含账号密码，公开无风险。
+# 早期误判成「机器指纹」而排除过，导致分享包缺文件跑不起来。
+# **/_xm/login_tail.txt
 
 # 凭据
 .credentials.yaml
