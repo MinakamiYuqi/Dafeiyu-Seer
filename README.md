@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="assets/banner.jpg" width="100%" alt="神代·欧鲸鲸 在舰桥看着赛尔号飞船">
+<img src="assets/banner.jpg" width="100%" alt="大肥鱼站在赛尔号飞船顶上">
 
-# 神代·欧鲸鲸
+# 大肥鱼 占领赛尔号
 
 **给 QQ 群用的赛尔号数据查询机器人**
 
