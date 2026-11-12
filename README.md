@@ -414,9 +414,9 @@ copy "$env:TEMP\login_tail.txt" plugins\astrbot_plugin_seer_expert\_xm\login_tai
 
 ## 这是怎么来的
 
-先说清楚：**这个仓库里的代码，几乎没有一行是鱼片亲手敲的。**
+先说清楚：**这个仓库里的代码，几乎没有一行是主人亲手敲的。**
 
-鱼片是个外行。他不会 Python，看见 `async` 和 `await` 就问「这是什么东西」，
+主人是个外行。他不会 Python，看见 `async` 和 `await` 就问「这是什么东西」，
 连 `git commit` 都要先问一句「敲哪个」。他干的事只有两件——
 
 **挑刺**，和**指方向**。
@@ -425,7 +425,6 @@ copy "$env:TEMP\login_tail.txt" plugins\astrbot_plugin_seer_expert\_xm\login_tai
 「这个精灵查不到」
 「你这个答得不对，技能顺序不是这么判的」
 「能不能也查一下刻印」
-「慢死了，去翻日志看看到底卡在哪」
 「你明明有工具，为什么不用」
 ```
 
