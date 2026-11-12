@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -138,7 +139,8 @@ async def sync(db_dir: str, names: tuple[str, ...] = WANTED) -> dict[str, str]:
                     data = await resp.read()
 
                 # 落盘前验货：不合格就丢掉，保住本地旧库
-                ok, why = _validate_db_bytes(data)
+                # 放线程：sqlite 校验是同步阻塞的，直接在事件循环里跑会卡住整只 bot
+                ok, why = await asyncio.to_thread(_validate_db_bytes, data)
                 if not ok:
                     result[prefix] = f"丢弃（{why}）"
                     continue
@@ -147,7 +149,7 @@ async def sync(db_dir: str, names: tuple[str, ...] = WANTED) -> dict[str, str]:
                 if os.path.isfile(dest):
                     backup = dest + time.strftime(".bak-%Y%m%d-%H%M%S")
                     try:
-                        shutil.copy2(dest, backup)
+                        await asyncio.to_thread(shutil.copy2, dest, backup)
                     except OSError as exc:
                         # 备份失败还继续覆盖 = 「声称有备份、实际没有」，必须让人看见
                         logger.warning(
@@ -157,10 +159,14 @@ async def sync(db_dir: str, names: tuple[str, ...] = WANTED) -> dict[str, str]:
                         )
 
                 # 原子替换：先写临时文件再 rename，避免半截文件
-                tmp_path = dest + ".tmp"
-                with open(tmp_path, "wb") as f:
-                    f.write(data)
-                os.replace(tmp_path, dest)
+                # 写盘 + 替换一起放线程：几十 MB 写入会明显卡事件循环
+                def _atomic_write(path: str, blob: bytes) -> None:
+                    tmp = path + ".tmp"
+                    with open(tmp, "wb") as f:
+                        f.write(blob)
+                    os.replace(tmp, path)
+
+                await asyncio.to_thread(_atomic_write, dest, data)
                 result[prefix] = f"{filename} ({len(data) // 1024} KB)"
             except Exception as exc:  # noqa: BLE001
                 result[prefix] = f"失败 {exc}"

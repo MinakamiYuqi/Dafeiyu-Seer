@@ -32,6 +32,7 @@ update
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -212,7 +213,7 @@ async def _download(
             with os.fdopen(fd, "wb") as f:
                 async for chunk in resp.content.iter_chunked(256 * 1024):
                     f.write(chunk)
-            os.replace(tmp, dest)
+            await asyncio.to_thread(os.replace, tmp, dest)
         except BaseException:
             try:
                 os.unlink(tmp)
@@ -245,7 +246,8 @@ async def _sync_one(
 
         # 已下载的文件和指纹同时存在才算「已是最新」
         if remote == _recorded_sha(db_path) and os.path.isfile(db_path):
-            local = _sha256_file(db_path)
+            # 放线程：62MB 的 sha256 同步算要几十秒，会卡死事件循环
+            local = await asyncio.to_thread(_sha256_file, db_path)
             if local == remote:
                 return f"{name}: 已是最新（{remote[:12]}）"
             logger.warning("[data_sync] %s 指纹一致但内容不符，重新下载", name)
@@ -255,7 +257,8 @@ async def _sync_one(
         except Exception as exc:  # noqa: BLE001
             return f"{name}: 下载失败（{type(exc).__name__}: {exc}）"
 
-    ok, detail = validate(db_path)
+    # 放线程：校验要开 sqlite、查表、数行，同步跑会卡事件循环
+    ok, detail = await asyncio.to_thread(validate, db_path)
     if not ok:
         # 不合格就整包丢弃，绝不覆盖旧库
         try:
@@ -265,7 +268,7 @@ async def _sync_one(
         logger.error("[data_sync] %s 验货未通过，已丢弃下载文件：%s", name, detail)
         return f"{name}: 验货未通过（{detail}），已丢弃、保留旧库"
 
-    _write_sha(db_path, remote)
+    await asyncio.to_thread(_write_sha, db_path, remote)
     return f"{name}: 已更新 → {detail}"
 
 
@@ -297,10 +300,10 @@ async def sync_all(data_dir: str) -> dict[str, str]:
     alias_path = os.path.join(data_dir, "aliases.sqlite")
 
     if os.path.isfile(seerapi_path):
-        _backup(seerapi_path)
+        await asyncio.to_thread(_backup, seerapi_path)
     out["seerapi"] = await sync_seerapi(seerapi_path)
 
     if os.path.isfile(alias_path):
-        _backup(alias_path)
+        await asyncio.to_thread(_backup, alias_path)
     out["aliases"] = await sync_aliases(alias_path)
     return out
