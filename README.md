@@ -1,26 +1,85 @@
-# 赛尔号查询插件（AstrBot）
+<div align="center">
 
-给 QQ 群用的赛尔号（Seer）查询工具：精灵数据、官方词条、玩家结论、阵容战绩。
+<img src="assets/portrait.jpg" width="640" alt="神代·欧鲸鲸">
 
-## 目录
+# 神代·欧鲸鲸
+
+**给 QQ 群用的赛尔号数据查询机器人**
+
+精灵 / 技能 / 魂印 / 套装 / 刻印 / 伤害计算 / 先手判定 / 阵容战绩
+
+[![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.27.2-4B8BBE?style=flat-square)](https://github.com/AstrBotDevs/AstrBot)
+[![License](https://img.shields.io/badge/license-GPL%20v3-blue?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square)](https://www.python.org/)
+
+</div>
+
+---
+
+## 长什么样
+
+**问「给我画张顶配无极圣武的配置图」——** 它算完面板直接出图，不用你手动填派生：
+
+<div align="center">
+<img src="assets/config.jpg" width="420" alt="配置图生成">
+</div>
+
+**问规则——** 它会说清楚「为什么」，顺便提醒你别跟相邻的规则搞混：
+
+<div align="center">
+<img src="assets/sass.jpg" width="600" alt="规则问答">
+</div>
+
+**问伤害——** 能一路算到「还剩 29 点血」，并告诉你「要是没晨曦就直接送走了」：
+
+<div align="center">
+<img src="assets/damage.jpg" width="420" alt="伤害计算">
+</div>
+
+---
+
+## 装什么、怎么装
 
 | 路径 | 作用 |
 |---|---|
-| `plugins/astrbot_plugin_seer_expert` | 查询主力。32 个工具，覆盖精灵 / 技能 / 魂印 / 套装 / 刻印 / 伤害计算 / 先手判定，自带三个数据源的更新逻辑 |
+| `plugins/astrbot_plugin_seer_expert` | **查询主力**。32 个工具，覆盖精灵 / 技能 / 魂印 / 套装 / 刻印 / 伤害计算 / 先手判定，自带三个数据源的更新逻辑 |
 | `plugins/astrbot_plugin_seer_info` | 数据层 + 群友互动（奶龙图库、配置图上传）。改造自 `MengNianxiaoyao` 的 GPL v3 项目，详见其 `NOTICE.md` |
-| `seer-cli/seer.py` | 独立命令行查询器，人和 agent 都能用，不依赖 AstrBot |
+| `seer-cli/seer.py` | **独立命令行查询器**，人和 agent 都能用，不依赖 AstrBot |
 | `plugins/astrbot_plugin_seer_expert/_xm/login_tail.txt` | 无头登录必需的协议尾巴，仓库自带；详见[文末说明](#关于-_xmlogin_tailtxt) |
 
 **两个插件互不依赖，装哪个都能用**：
 
 ```
-只想查数据        → 装 seer_expert 就够（它自己同步 seerapi / aliases / manual_db）
-还想要奶龙和配置图 → 再装 seer_info
-两个都装          → 数据文件共享同一份，不会重复下载
+只想查数据          → 装 seer_expert 就够（它自己同步 seerapi / aliases / manual_db）
+还想要奶龙和配置图  → 再装 seer_info
+两个都装            → 数据文件共享同一份，不会重复下载
 ```
 
 > 早先还有一个 `seer_dsh`（把难题转给 DSH agent）。实测下来和直接问 bot 拉不开差距，
 > 还多一层 150 秒超时风险，已经移除。
+
+### 三步装好
+
+```bash
+# 1. 装 AstrBot
+#    https://github.com/AstrBotDevs/AstrBot
+
+# 2. 把两个插件目录复制过去
+cp -r plugins/astrbot_plugin_seer_expert <AstrBot>/data/plugins/
+cp -r plugins/astrbot_plugin_seer_info   <AstrBot>/data/plugins/
+
+# 3. 重启 AstrBot
+```
+
+**首次启动后会自动准备数据**：
+
+| 数据 | 什么时候好 | 说明 |
+|---|---|---|
+| `seerapi.sqlite` / `aliases.sqlite` | 启动约 3 分钟 | 约 62 MB，耐心等 |
+| `manual_db/`（15 个手册库） | 启动约 10 分钟 | 官方词条来源 |
+| `kb.sqlite` | **不会自动生成** | 空库也能跑，只是「玩家结论」那部分查不到 |
+
+---
 
 ## 三个数据源
 
@@ -30,12 +89,25 @@
 玩家结论  →  kb.sqlite                 facts 表，一条一个主题
 ```
 
-**哪个源查什么不能混**：查「词条定义」走 effectDes，查「精灵数值」走 seerapi，查「实战结论」走 kb。
-库里查不到 ≠ 游戏里没有，换源顺序是 官方词条 → 玩家结论 → 才说没有。
+**口诀：定义查 effectDes，数据查 seerapi，结论查 kb。**
+
+**哪个源查什么不能混。** 库里查不到 ≠ 游戏里没有，换源顺序是：
+
+```
+官方词条（effectDes）
+    ↓ 没命中
+玩家结论（kb.facts）
+    ↓ 还没有
+才说「库里没有」
+```
+
+> **`kb.sqlite` 里的一切都是「玩家说的」，不是游戏官方。** 引用时要说明来源。
+
+---
 
 ## 数据从哪来、怎么更新
 
-### ① seerapi.sqlite — 游戏数据镜像
+### ① `seerapi.sqlite` — 游戏数据镜像
 
 ```
 来源:  https://github.com/Murmansk-Seer/seerapi
@@ -44,7 +116,7 @@
 更新:  data_sync.py::sync_seerapi，每 60 分钟比对一次指纹
 ```
 
-### ② aliases.sqlite — 精灵别名库
+### ② `aliases.sqlite` — 精灵别名库
 
 ```
 来源:  https://github.com/Murmansk5000/IronsBot
@@ -53,14 +125,14 @@
 更新:  data_sync.py::sync_aliases，每 60 分钟比对一次指纹
 ```
 
-### ③ manual_db/ — 官方词条手册（15 个库）
+### ③ `manual_db/` — 官方词条手册（15 个库）
 
 ```
 来源:  https://cnb.cool/SeerFire/update_cnb/-/git/raw/main/generated_files/db
 更新:  manual_sync.py::sync，默认每 24 小时一轮
 ```
 
-### ④ kb.sqlite — 玩家知识库
+### ④ `kb.sqlite` — 玩家知识库
 
 **不自动更新**，是本项目的自用数据。破坏性写入前会自动快照（`kb_backups/`，保留最近若干份）。
 
@@ -79,26 +151,17 @@
 **验货不通过就整包丢弃、保留旧库。** 这不是洁癖：上游曾经漏发 34 张表（含 `pet_special_effect`），
 老同步逻辑无校验直接覆盖，导致专属名词查询全部静默失效了好几天。
 
-## 安装
-
-1. 装 [AstrBot](https://github.com/AstrBotDevs/AstrBot)
-2. 把 `plugins/` 下两个目录复制到 `<AstrBot>/data/plugins/`
-3. 重启 AstrBot
-
-首次启动后：
-
-- `seerapi.sqlite` / `aliases.sqlite`：启动约 3 分钟后自动下载（约 62 MB，耐心等）
-- `manual_db/`：启动约 10 分钟后自动同步 15 个手册库
-- `kb.sqlite`：**不会自动生成**，空库也能跑，只是「玩家结论」那部分查不到
+---
 
 ## 查战绩 / 查阵容的额外准备
 
-`seer_pvp` / `seer_roster` 走无头客户端直连游戏服务器，需要：
+`seer_pvp` / `seer_roster` 走无头客户端直连游戏服务器，需要两样东西：
 
-1. `_xm/login_tail.txt` —— **仓库里已经带了**（984 字符 hex，解码 492 字节）。
-   内容是 `taomee` + `unity_app_taomee` + `com.taomee.seer.mobile` + 设备型号，
-   不含账号密码，直接用就行。Temp 目录被清时 `seer_pvp` 会自动从 `_xm/` 复制回去。
-2. 一个专用小号的米米号密码，通过环境变量给：
+**① `_xm/login_tail.txt`** —— **仓库里已经带了**（984 字符 hex，解码 492 字节）。
+内容是 `taomee` + `unity_app_taomee` + `com.taomee.seer.mobile` + 设备型号，
+不含账号密码，直接用就行。Temp 目录被清时 `seer_pvp` 会自动从 `_xm/` 复制回去。
+
+**② 一个专用小号的米米号密码**，通过环境变量给：
 
 ```powershell
 [Environment]::SetEnvironmentVariable("SEER_ACCOUNT", "你的米米号", "User")
@@ -107,30 +170,104 @@
 
 缺这些时这两个工具会报错提示，其余 30 个工具正常。
 
-> **小号必须专号专用**：同一账号同一时刻只能一个在线，和你自己玩会互相踢下线。
+> ⚠️ **小号必须专号专用**：同一账号同一时刻只能一个在线，和你自己玩会互相踢下线。
+
+---
 
 ## 命令行用法
 
+不装 AstrBot 也能用，直接查：
+
 ```bash
-python seer-cli/seer.py pet 灵巢             # 精灵全景
-python seer-cli/seer.py glossary --kind 语法  # 官方判定用语
-python seer-cli/seer.py suit 晨曦             # 套装战斗效果
+python seer-cli/seer.py pet 灵巢               # 精灵全景
+python seer-cli/seer.py glossary --kind 语法    # 官方判定用语
+python seer-cli/seer.py suit 晨曦               # 套装战斗效果
 python seer-cli/seer.py raw "select count(*) from facts"
 ```
 
+```bash
+# 查官方词条（最容易走错的地方）
+python seer-cli/seer.py glossary                # 先看有哪些类别
+python seer-cli/seer.py glossary --kind 时点     # 21 条时点一次看完
+python seer-cli/seer.py glossary 未触发          # 精确查一条
+
+# 查套装（只有 79 套有战斗效果，其余只有背景故事）
+python seer-cli/seer.py suit                    # 列出全部
+python seer-cli/seer.py suit --search 减少        # 按效果关键词搜（用原文词）
+
+# 直接 SQL
+python seer-cli/seer.py raw "select name from pet limit 5" --db seerapi
+```
+
+---
+
 ## 已知的坑
 
-- **`glossary_entry`（595 条）是 `effectDes`（640 条）的子集**，查官方词条要走后者
-- **`pet_special_effect` 会子串误挂**（「失体」挂到 199 只精灵），用 `pet_effects()` 而非直查
-- **套装效果在 `suit_bonus` 表，关联键是 `suit.id`**，不是 `equip.bonus_id`
-- **Lv0 技能是道具开启的补强**（175 只精灵 / 264 个技能），常直接改机制，查精灵别漏
-- **判「库重复」不能只看代码引用**，必须逐字段比对；删库前先比对内容
-- **`raw` 命令默认只连 kb 库**，查游戏数据要加 `--db seerapi`
-- **皮肤头像会缺**：上游对部分皮肤不单独出图（新机体复用老机体），
-  取图时按 `皮肤 → 同名皮肤 → 同名精灵 → 本体` 四级回退
-- **`_xm/login_tail.txt` 不能排除**：它曾被当成「机器指纹」写进 .gitignore 和
-  build_repo.py 的排除表，结果分享包缺文件、别人装完 `seer_pvp` 直接跑不起来。
-  实际内容只有协议常量 + 设备型号，公开无风险。
+> 这些全是踩出来的，不是猜的。每条都写清了「为什么错」和「正确做法」。
+
+**① `glossary_entry`（595 条）是 `effectDes`（640 条）的子集**
+
+```
+seerapi.glossary_entry   595 条   异常状态只 48 条、没有免疫类
+manual_db/effectDes      640 条   异常状态 91 条、免疫类 2 条
+```
+
+查官方词条**走 effectDes**。有人告诉你「查 glossary_entry」是过时信息。
+
+**② `pet_special_effect` 会子串误挂**
+
+```
+「失体」挂到了 199 只精灵 —— 只因为魂印里含「已损失体力值」
+真主人是 #4499 德布比特
+```
+
+走 `pet_effects()`，它内置独立词校验。别自己直查这张表。
+
+**③ 套装战斗效果不走 `equip.bonus_id`**
+
+```
+suit 表        479 套   只有名字 + 背景故事，没有任何战斗效果字段
+suit_bonus 表   79 条   这才是套装的战斗效果原文
+equip.bonus_id          2125 个部件里只有 90 个非空
+```
+
+**关联键是 `suit_bonus.id = suit.id`，不是 equip 表。** 按 `equip.bonus_id` 去 join 必然查空。
+
+**④ Lv0 技能是道具开启的补强，不查就漏机制**
+
+```
+王·联盟审判  威力350  ← 王·雷伊 / 王·卡修斯 / 王·布莱克 / 王·缪斯 / 王·盖亚
+零时诳语     威力0    ← 梦天睡神，把魂印「减伤75%」改成「增伤75%」
+```
+
+**规模：175 只精灵、264 个技能。** 查精灵的标准顺序：**魂印 → Lv0 技能 → 第五 → 属性技 → 高威力攻击**。
+
+**⑤ 判「库重复」不能只看代码引用**
+
+2026-11-02 有人看代码没引用，就要删 `moves` / `petEffectIcon` / `rich_text_tree` 三个库。
+逐字段比对后发现全靠 seerapi 没有的独有数据，**全部救回来了**。
+
+**铁律：删任何库之前，先比对字段和内容，不能只看 grep 结果。**
+
+**⑥ `raw` 命令默认只连 kb 库**
+
+```bash
+seer.py raw "select * from pet"              # 报错
+seer.py raw "select * from pet" --db seerapi  # 正确
+```
+
+**⑦ 皮肤头像会缺**
+
+上游对部分皮肤不单独出图（新机体复用老机体）。
+取图时按 **`皮肤 → 同名皮肤 → 同名精灵 → 本体`** 四级回退。
+
+**⑧ `_xm/login_tail.txt` 不能排除**
+
+它曾被当成「机器指纹」写进 `.gitignore` 和 `build_repo.py` 的排除表，
+结果分享包缺文件、别人装完 `seer_pvp` 直接跑不起来。
+实际内容只有协议常量 + 设备型号，公开无风险。
+
+---
 
 ## 来源与致谢
 
@@ -146,6 +283,18 @@ AstrBot 插件市场的赛尔号插件（MengNianxiaoyao，GPL v3）
 
 **如果你也参考了这些项目，请把致谢一样写清楚。**
 
+数据版权归原出处：
+
+```
+游戏数据       © 淘米
+seerapi 数据包  Murmansk-Seer
+别名库          Murmansk5000/IronsBot
+手册词条        火火（Yogurt114514）
+玩家结论        本群群友
+```
+
+---
+
 ## 许可
 
 本仓库整体遵循 **GNU GPL v3**（见 [LICENSE](LICENSE)）——
@@ -158,9 +307,6 @@ seer-cli      GPL v3
 ```
 
 **再分发时**：保留 `LICENSE` 与各目录的 `NOTICE.md`，你的版本也用 GPL v3，并说明相对上游改了什么。
-
-引用的数据版权归原出处：游戏数据 © 淘米，seerapi 数据包来自 Murmansk-Seer，
-别名库来自 Murmansk5000/IronsBot，手册词条来自火火（Yogurt114514），玩家结论来自本群群友。
 
 ---
 
