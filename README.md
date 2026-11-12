@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/portrait.jpg" width="640" alt="神代·欧鲸鲸">
+<img src="assets/banner.jpg" width="100%" alt="神代·欧鲸鲸 在舰桥看着赛尔号飞船">
 
 # 神代·欧鲸鲸
 
