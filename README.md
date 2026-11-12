@@ -18,22 +18,63 @@
 
 ## 长什么样
 
-**问「给我画张顶配无极圣武的配置图」——** 它算完面板直接出图，不用你手动填派生：
+### ① 配置图生成
+
+问一句，它算完面板直接出图 —— 还主动交代「魂印那个派生我自动认出来了，不用你手动填」：
 
 <div align="center">
-<img src="assets/config.jpg" width="420" alt="配置图生成">
+<img src="assets/config.jpg" width="560" alt="顶配无极圣武配置图">
 </div>
 
-**问规则——** 它会说清楚「为什么」，顺便提醒你别跟相邻的规则搞混：
+### ② 配置速查
+
+库里的配装直接给你，连「谁整理的、什么时候收录的」一起标出来：
 
 <div align="center">
-<img src="assets/sass.jpg" width="600" alt="规则问答">
+<img src="assets/xman.jpg" width="640" alt="西曼德妮配置">
 </div>
 
-**问伤害——** 能一路算到「还剩 29 点血」，并告诉你「要是没晨曦就直接送走了」：
+### ③ 伤害计算
+
+「1199 血的艾夏拉会不会被掉命斩」—— 它一路算到**还剩 29 点血**，
+还补一句「要是没晨曦，1289 就直接送走了」：
 
 <div align="center">
-<img src="assets/damage.jpg" width="420" alt="伤害计算">
+<img src="assets/damage.jpg" width="540" alt="伤害计算">
+</div>
+
+### ④ 必先判定
+
+不是背答案，是查了 rank 再说：
+
+```
+混布 vs 天马  → 同级 rank 2，看谁是房主（挑战方先手）
+月照 vs 谱尼  → 谱尼「永恒」rank 1 必先；月照的月下华尔兹才 rank 9，还得自己血低于 200
+```
+
+<div align="center">
+<img src="assets/first.jpg" width="540" alt="必先判定">
+</div>
+
+### ⑤ 查阵容
+
+报一个米米号，6 只出战 + 6 只待命全扒出来，还能用语音回你：
+
+<div align="center">
+<img src="assets/roster.jpg" width="540" alt="查阵容">
+</div>
+
+### ⑥ 查巅峰
+
+```
+竞技王者 6 星，历史上过宇宙圣皇 101 星
+竞技 17/17、狂野 22/23、专家 15/15、大师 15/15
+```
+
+它自己都忍不住吐槽「这号干净得有点吓人」：
+
+<div align="center">
+<img src="assets/peak.jpg" width="600" alt="查巅峰信息">
 </div>
 
 ---
