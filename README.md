@@ -155,3 +155,22 @@ seer-cli      GPL v3
 
 引用的数据版权归原出处：游戏数据 © 淘米，seerapi 数据包来自 Murmansk-Seer，
 别名库来自 Murmansk5000/IronsBot，手册词条来自火火（Yogurt114514），玩家结论来自本群群友。
+
+---
+
+## 关于 `_xm/login_tail.txt`
+
+无头客户端登录时需要这个文件（`headless.py` 从 `%TEMP%\login_tail.txt` 读），
+Temp 目录被系统清理后会登录失败。`seer_pvp.py` 里有自愈逻辑，会从
+`_xm/login_tail.txt` 复制回去 —— **所以它必须随包分发，别删**。
+
+内容解码后是 492 字节：`taomee` + `unity_app_taomee` + `com.taomee.seer.mobile`
++ 一个笔记本型号（`NitroAN515-55`），**没有账号、密码或唯一设备 ID**。
+早期把它当成「机器指纹」排除过，导致别人 clone 下来缺文件跑不起来 —— 已修正。
+
+如果登录仍失败（比如赛尔号客户端升级改了协议），把你自己 `%TEMP%\login_tail.txt`
+替换进来即可：
+
+```powershell
+copy "$env:TEMP\login_tail.txt" plugins\astrbot_plugin_seer_expert\_xm\login_tail.txt
+```
