@@ -5217,7 +5217,21 @@ class SeerExpertPlugin(Star):
             key = 192
         label = VOTE_KEYS.get(key, ("", 0))[0]
 
-        data = await probe_latest(key)
+        # 账号密码：优先插件配置，回落环境变量
+        # （2026-11-14：一开始这里没传，_creds(None, None) 只读环境变量 →
+        #  重启后必然报「缺服务账号」，和查战绩那条路径不一致）
+        _acc = str(self._c("seer_account", "") or "").strip()
+        _pwd = str(self._c("seer_password", "") or "").strip()
+        if not _acc:
+            _acc = (os.environ.get("SEER_ACCOUNT") or "").strip()
+        if not _pwd:
+            _pwd = (os.environ.get("SEER_PASSWORD") or "").strip()
+        if not _acc or not _pwd:
+            return None, {"error": "缺账号"}, (
+                "查投票需要赛尔号小号：请在插件配置里填 seer_account / seer_password。\n"
+                "（同一个米米号只能一个人在线，建议用专用小号）"
+            )
+        data = await probe_latest(key, account=_acc, password=_pwd)
         if data.get("error"):
             return None, data, data["error"]
         rows = data.get("rows") or []
