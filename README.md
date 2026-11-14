@@ -708,6 +708,14 @@ https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/astrbot_pl
 
 ### 2026-11-14
 
+**⚠️ Release 已更新（18:07）** —— 之前下载过的请重新下，旧包缺「/巅峰投票 报缺服务账号」的修复。
+
+**修了 `/巅峰投票` 报「缺服务账号」**
+
+`seer_vote` 调 `probe_latest()` 时没传账号密码，而它内部只读环境变量
+（`SEER_ACCOUNT` / `SEER_PASSWORD`），配置里的 `seer_account` 根本没用上。
+查战绩/查阵容两条路径本来就有 `self._seer_creds()`，只有新加的投票漏了。
+
 **修了一个影响 89.6% 精灵的 bug**
 
 - 立绘只查 `pet_skin`（889 条），而 4951 只精灵里只有 514 只有皮肤 →
