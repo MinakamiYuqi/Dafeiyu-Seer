@@ -1,0 +1,13 @@
+name: astrbot_plugin_seer_info
+display_name: 赛尔号数据查询插件
+desc: 赛尔号信息查询插件，支持精灵、刻印、装备等数据查询
+author: 梦念逍遥
+version: v1.0.8
+astrbot_version: ">=4.16"
+social_link: https://github.com/MengNianxiaoyao
+support_platforms:
+  - aiocqhttp
+short_desc: 赛尔号数据查询插件
+category: 娱乐
+tags:
+  - 赛尔号

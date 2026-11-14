@@ -1,0 +1,4 @@
+seerapi_models>=106.7.0
+pypinyin
+jinja2
+playwright==1.61.0
