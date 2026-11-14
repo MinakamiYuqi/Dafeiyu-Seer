@@ -66,6 +66,40 @@ cp -r Dafeiyu-Seer/plugins/astrbot_plugin_seer_info    <AstrBot 目录>/data/plu
 
 （Windows 用 `xcopy /E /I` 或直接拖文件夹）
 
+### 可选：图库包（配置图 + 奶龙图）
+
+装完是**空的** —— 配置图和奶龙图都是群友一张张攒出来的，不在插件代码里。
+想一装就有内容，下载这两个包：
+
+| 文件 | 内容 | 大小 |
+|---|---|---|
+| [seer_pet_configs.zip](https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/seer_pet_configs.zip) | 72 只精灵的配置图 + 面板数据（97 张） | 68 MB |
+| [seer_milk_dragon.zip](https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/seer_milk_dragon.zip) | 26 张奶龙恶搞图 | 43 MB |
+
+**解压到**：
+
+```
+<AstrBot>/data/plugin_data/astrbot_plugin_seer_info/
+  ├── pet_configs/     ← 解压 seer_pet_configs.zip 到这里
+  └── milk_dragon/     ← 解压 seer_milk_dragon.zip 到这里
+```
+
+**已经有了也不会覆盖** —— 只补充缺的，自己群友后来传的不受影响。
+
+**除非你要用**：不装也能跑，只是 `/配置` 和奶龙功能一开始是空的，
+靠群友自己上传慢慢攒。
+
+<details>
+<summary>关于这些图的身份信息（点开看）</summary>
+
+配置图元数据里的 `author`（群友昵称）**保留了** —— 赛尔号圈子里「这张配置图谁配的」
+是荣誉，而且只有昵称、没有号码。
+
+`uploader` 字段（群友 QQ 号的 md5 哈希）**已经删掉**，`uploaders.json`
+（141 条明文 QQ 号 + 群昵称）**不发布**，那个文件只留在本机自己用。
+
+</details>
+
 ### 装完还要做两件事
 
 ```
