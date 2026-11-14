@@ -27,12 +27,14 @@ README + 命令行工具」，插件在 `plugins/` 子目录里。它看不到�
 
 ### 方式一：下载 Release 里的插件包（推荐，不用 git）
 
-去 [Releases](../../releases) 页下载这两个文件：
+**直接点这两个链接下载**（永远是最新版）：
 
-```
-astrbot_plugin_seer_expert.zip      ← 查询主力（精灵/技能/魂印/套装/刻印/伤害/巅峰池/投票）
-astrbot_plugin_seer_info.zip        ← 数据层 + 群友互动（奶龙图库、配置图上传、立绘查询）
-```
+| 文件 | 作用 | 大小 |
+|---|---|---|
+| [astrbot_plugin_seer_expert.zip](https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/astrbot_plugin_seer_expert.zip) | **查询主力**：精灵 / 技能 / 魂印 / 套装 / 刻印 / 伤害计算 / 先手判定 / 巅峰池 / 巅峰投票 | 0.8 MB |
+| [astrbot_plugin_seer_info.zip](https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/astrbot_plugin_seer_info.zip) | **数据层 + 群友互动**：奶龙图库、配置图上传、立绘查询 | 0.8 MB |
+
+（也可以去 [Releases](../../releases) 页看更新说明再下）
 
 然后二选一：
 
