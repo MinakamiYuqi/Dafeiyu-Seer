@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #2b2b2b;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    display: inline-block;
+    background: #f4f1e8;
+    padding: 0 0 0 0;
+  }
+
+  /* ── 标题 ── */
+  .title {
+    padding: 16px 24px 14px;
+    background: #1f1f1f;
+    color: #f6f2e6;
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    line-height: 1.25;
+  }
+  .title .sub {
+    display: block;
+    margin-top: 6px;
+    font-size: 15px;
+    font-weight: 400;
+    color: #a9a496;
+    letter-spacing: .5px;
+  }
+
+  /* ── 分级行 ── */
+  .row {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 2px solid #cfc9b8;
+  }
+  .row:last-child { border-bottom: none; }
+
+  .lab {
+    width: 158px;
+    flex: 0 0 158px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 40px;
+    font-weight: 900;
+    letter-spacing: 2px;
+    border-right: 2px solid #cfc9b8;
+    text-shadow: 0 1px 0 #00000022;
+  }
+  .lab .cnt {
+    position: absolute;
+  }
+
+  .cells {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    min-height: 152px;
+    background: #eceae0;
+    flex-wrap: wrap;
+  }
+
+  .slot {
+    width: 138px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .slot .art {
+    width: 138px;
+    height: 118px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .slot .art img {
+    max-width: 138px;
+    max-height: 118px;
+    object-fit: contain;
+    image-rendering: -webkit-optimize-contrast;
+  }
+  .slot .art .ph {
+    font-size: 13px;
+    color: #9a9484;
+  }
+  .slot .nm {
+    font-size: 13px;
+    font-weight: 700;
+    color: #2b2b2b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 138px;
+  }
+
+  /* 空行提示 */
+  .empty {
+    font-size: 15px;
+    color: #a8a292;
+    padding: 12px 0;
+  }
+
+  /* ── 页脚 ── */
+  .foot {
+    padding: 10px 24px 13px;
+    background: #1f1f1f;
+    color: #8d8878;
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="title">
+    {{ title }}
+    {% if subtitle %}<span class="sub">{{ subtitle }}</span>{% endif %}
+  </div>
+
+  {% for row in rows %}
+  <div class="row">
+    <div class="lab" style="background: {{ row.color }}; color: {{ row.text }};">{{ row.label }}</div>
+    <div class="cells">
+      {% if row.pets %}
+        {% for p in row.pets %}
+        <div class="slot">
+          <div class="art">
+            {% if p.img %}<img src="{{ p.img }}" alt="">{% else %}<span class="ph">{{ p.name }}</span>{% endif %}
+          </div>
+          <div class="nm">{{ p.name }}</div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <span class="empty">（空）</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="foot">
+    <span>{{ footer_left }}</span>
+    <span>{{ footer_right }}</span>
+  </div>
+
+</div>
+</body>
+</html>

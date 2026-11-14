@@ -6398,6 +6398,39 @@ class SeerKnowledge:
 
     _STATUS_CAT_RE = __import__("re").compile(r"^([\u4e00-\u9fa5]{2,6}类)异常状态")
 
+    def pool_data_version(self) -> str:
+        """pvp.db 的数据版本。
+
+        2026-11-14 加：模型曾经在没有任何日期依据时自己编了个「10-30 那期」，
+        而实际 pvp.db 的 ban_* 档期字段是空的。这里给出真实可追溯的版本号：
+        优先取 manual_sync 落盘的 `.version` 旁注，没有就退到文件 mtime。
+        游戏内「巅峰圣战精灵池」页面顶部显示的就是这个时间戳
+        （实测 2026-11-13 19:00:33 对应上游文件名 pvp_20261113190033.db）。
+        """
+        import datetime as _dt
+        try:
+            path = os.path.join(self.manual_db_dir(), "pvp.db")
+        except Exception:
+            return ""
+        if not os.path.isfile(path):
+            return ""
+        # ① 优先：manual_sync 落的上游文件名（pvp_20261113190033.db → 2026-11-13 19:00:33）
+        try:
+            vpath = path + ".version"
+            if os.path.isfile(vpath):
+                raw = open(vpath, encoding="utf-8").read().strip()
+                m = re.search(r"_(\d{8})(\d{6})", raw)
+                if m:
+                    d, tm = m.group(1), m.group(2)
+                    return f"{d[:4]}-{d[4:6]}-{d[6:8]} {tm[:2]}:{tm[2:4]}"
+        except Exception:
+            pass
+        # ② 兜底：本地同步时间
+        try:
+            return _dt.datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return ""
+
     def _pool_rows(self) -> list[tuple[str, list[str], str]]:
         """读手册同步下来的 pvp.db，返回 [(池名, 精灵名列表, 截止时间)]。"""
         import json as _json
@@ -6520,6 +6553,8 @@ class SeerKnowledge:
             "mode": "list", "pet": pt, "pool": pl,
             "hits": [], "pools": [], "matched": None,
             "empty_hint": None,
+            # 2026-11-14：真实数据版本，避免模型自行编造档期
+            "version": self.pool_data_version(),
         }
 
         if pt:

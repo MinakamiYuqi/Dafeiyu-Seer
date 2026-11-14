@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: #2b2b2b;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    display: inline-block;
+    background: #f2efe6;
+  }
+
+  /* ── 标题条（照手册那套深红棕）── */
+  .title {
+    padding: 18px 26px 15px;
+    background: #7a3b32;
+    color: #fdf6ec;
+    font-size: 31px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    line-height: 1.25;
+  }
+  .title .sub {
+    display: block;
+    margin-top: 7px;
+    font-size: 15px;
+    font-weight: 400;
+    color: #e6cfc2;
+    letter-spacing: .5px;
+  }
+
+  /* ── 每个档位一块 ── */
+  .block {
+    margin: 14px 14px 0;
+    background: #fbf9f3;
+    border: 1px solid #e3ddcd;
+    border-radius: 14px;
+    padding: 14px 16px 16px;
+  }
+  .block:last-child { margin-bottom: 14px; }
+
+  .block-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding-bottom: 9px;
+    border-bottom: 1px dashed #ded7c6;
+  }
+  .block-head .name {
+    font-size: 22px;
+    font-weight: 800;
+    color: #3d3529;
+    letter-spacing: .5px;
+  }
+  .block-head .cnt {
+    font-size: 15px;
+    color: #8a8172;
+    font-weight: 600;
+  }
+
+  /* ── 精灵网格 ── */
+  .grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .cell {
+    width: 108px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #e9e3d4;
+    position: relative;
+  }
+  .cell .art {
+    width: 108px;
+    height: 108px;
+    display: block;
+    object-fit: cover;
+    background: #ddd6c4;
+  }
+  .cell .art.missing {
+    background: repeating-linear-gradient(
+      45deg, #ddd6c4, #ddd6c4 6px, #d3cbb6 6px, #d3cbb6 12px);
+  }
+  /* 左上角限制标（0/2/3 或 cost 数值） */
+  .cell .tag {
+    position: absolute;
+    left: 0; top: 0;
+    min-width: 26px;
+    height: 26px;
+    padding: 0 5px;
+    border-bottom-right-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 800;
+    color: #fff;
+  }
+  /* 右上角精灵编号 */
+  .cell .no {
+    position: absolute;
+    right: 4px; top: 4px;
+    padding: 1px 6px;
+    border-radius: 9px;
+    background: rgba(30, 26, 20, .58);
+    color: #f5efe2;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .5px;
+  }
+  .cell .nm {
+    padding: 5px 4px 6px;
+    font-size: 12px;
+    line-height: 1.25;
+    color: #3d3529;
+    text-align: center;
+    font-weight: 600;
+    word-break: break-all;
+  }
+
+  /* ── 页脚 ── */
+  .footer {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 20px 14px;
+    font-size: 13px;
+    color: #8a8172;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="title">
+    {{ title }}
+    {% if subtitle %}<span class="sub">{{ subtitle }}</span>{% endif %}
+  </div>
+
+  {% for b in blocks %}
+  <div class="block">
+    <div class="block-head">
+      <span class="name">{{ b.label }}</span>
+      <span class="cnt">{{ b.pets | length }} 只</span>
+    </div>
+    {% if b.pets %}
+    <div class="grid">
+      {% for p in b.pets %}
+      <div class="cell">
+        {% if p.img %}<img class="art" src="{{ p.img }}" alt="">{% else %}<div class="art missing"></div>{% endif %}
+        {% if b.tag is not none %}<span class="tag" style="background: {{ b.tag_color }}">{{ b.tag }}</span>{% endif %}
+        {% if p.no %}<span class="no">{{ p.no }}</span>{% endif %}
+        <div class="nm">{{ p.name }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div style="padding: 10px 4px; color:#8a8172; font-size:14px;">（这一档没有精灵）</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <div class="footer">
+    <span>{{ footer_left }}</span>
+    <span>{{ footer_right }}</span>
+  </div>
+</div>
+</body>
+</html>
