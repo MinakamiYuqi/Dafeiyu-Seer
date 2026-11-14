@@ -596,6 +596,76 @@ copy "$env:TEMP\login_tail.txt" plugins\astrbot_plugin_seer_expert\_xm\login_tai
 
 ---
 
+## 发版（维护者看，普通玩家跳过）
+
+改了插件代码之后，要重新打包并上传到 Release，玩家才能拿到新版。
+
+### 一条命令
+
+```bash
+# 在仓库根目录
+python scripts/pack_plugins.py
+```
+
+输出：
+
+```
+=== 打包 (2 个) ===
+  ✅ astrbot_plugin_seer_expert.zip  0.80 MB  25 项
+  ✅ astrbot_plugin_seer_info.zip    0.83 MB  49 项
+
+=== 验证 ===
+  astrbot_plugin_seer_expert.zip
+    结构检查 ✅✅✅✅  (metadata / main / 正斜杠 / 无顶层目录)
+  astrbot_plugin_seer_info.zip
+    结构检查 ✅✅✅✅
+```
+
+**四个 ✅ 的意思是**：
+
+```
+metadata.yaml 在 zip 根目录     ← AstrBot 靠这个认插件
+main.py 在 zip 根目录           ← 插件入口
+路径全是正斜杠                  ← Linux 解压不出错
+没有 plugins/插件名/ 前缀        ← 否则 B 站... 呃 AstrBot 会找不到
+```
+
+有任何一个 ❌ 就别发，先查插件目录结构。
+
+### 只打一个
+
+```bash
+python scripts/pack_plugins.py expert    # 只打 seer_expert
+python scripts/pack_plugins.py info      # 只打 seer_info
+python scripts/pack_plugins.py --list    # 看会打哪些
+```
+
+### 上传到 Release
+
+```
+1. 打开 https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases
+2. 点「Draft a new release」（或者编辑已有 Release）
+3. tag 用 v1.0.1 / v1.1.0 这种（改一版）
+4. 把 dist/ 下的两个 zip 拖进「Attach binaries」
+5. 发布
+```
+
+**玩家拿到的新下载地址**：
+
+```
+https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/astrbot_plugin_seer_expert.zip
+https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/astrbot_plugin_seer_info.zip
+```
+
+`latest` 这两个链接永远指向最新 Release，**README 里可以固定用它**。
+
+### 为什么 zip 不进 git
+
+`dist/` 已加进 `.gitignore`。zip 是**构建产物**，每次改代码都会变，
+进 git 会让仓库越来越肥，而且和源码重复。放 Release 正好。
+
+---
+
 ## 更新记录
 
 > 每次改动往这里加一条，**最新的放最上面**。格式随意，写清楚「改了什么 + 为什么」就行。
