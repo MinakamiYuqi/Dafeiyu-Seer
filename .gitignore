@@ -39,3 +39,6 @@ claude-key*.txt
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# 插件打包产物（走 GitHub Releases，不进仓库）
+dist/

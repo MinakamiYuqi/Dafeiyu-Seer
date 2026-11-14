@@ -16,6 +16,90 @@
 
 ---
 
+## ⚠️ 怎么装（先看这里，30 秒）
+
+**先说一个坑**：**不要把这个仓库的 URL 填进 AstrBot 的「从 URL 安装」**，会失败。
+
+原因是 AstrBot 要求**仓库根目录**就有 `metadata.yaml`，而本仓库是「一个仓库装两个插件 +
+README + 命令行工具」，插件在 `plugins/` 子目录里。它看不到子目录。
+
+**正确的装法有两种，任选一个。**
+
+### 方式一：下载 Release 里的插件包（推荐，不用 git）
+
+去 [Releases](../../releases) 页下载这两个文件：
+
+```
+astrbot_plugin_seer_expert.zip      ← 查询主力（精灵/技能/魂印/套装/刻印/伤害/巅峰池/投票）
+astrbot_plugin_seer_info.zip        ← 数据层 + 群友互动（奶龙图库、配置图上传、立绘查询）
+```
+
+然后二选一：
+
+**A. 网页上传**（最省事）
+
+```
+AstrBot 面板 → 插件 → 安装插件 → 从文件安装 → 选中 zip → 上传
+两个 zip 各传一次
+```
+
+**B. 命令行**（AstrBot 装在服务器上的话）
+
+```bash
+cd <AstrBot 目录>/data/plugins
+unzip astrbot_plugin_seer_expert.zip -d astrbot_plugin_seer_expert
+unzip astrbot_plugin_seer_info.zip   -d astrbot_plugin_seer_info
+```
+
+⚠ **注意 `-d`**：zip 里是插件内容本身（`metadata.yaml` 在最外层），
+所以要解压到一个**和插件同名的空目录**里。直接 `unzip xxx.zip` 会把文件倒进当前目录。
+
+### 方式二：clone 仓库后手动复制
+
+```bash
+git clone https://github.com/MinakamiYuqi/Dafeiyu-Seer.git
+cp -r Dafeiyu-Seer/plugins/astrbot_plugin_seer_expert  <AstrBot 目录>/data/plugins/
+cp -r Dafeiyu-Seer/plugins/astrbot_plugin_seer_info    <AstrBot 目录>/data/plugins/
+```
+
+（Windows 用 `xcopy /E /I` 或直接拖文件夹）
+
+### 装完还要做两件事
+
+```
+① 重启 AstrBot
+② 等它自动下载数据（首次约 3-6 分钟，会在日志里看到
+   「seerapi 同步」「manual_db 同步」这类字样）
+   数据没下完时查东西会说「数据库未加载」，等一会就好
+```
+
+### 装哪个？
+
+```
+只想查数据          → 装 seer_expert 就够（它自己同步 seerapi / aliases / manual_db）
+还想要奶龙和配置图  → 再装 seer_info
+两个都装            → 数据文件共享同一份，不会重复下载
+```
+
+**两个插件互不依赖**，装哪个都能用。
+
+### 给 AI 助手（DSH / Claude 等）的说明
+
+如果你是被主人叫来帮忙装插件的 AI，按这个来：
+
+```
+1. 两个插件都是 AstrBot 插件，目录要放进 <AstrBot>/data/plugins/
+2. 目录名不要改（astrbot_plugin_seer_expert / astrbot_plugin_seer_info）
+3. 不要把仓库根目录整个丢进 plugins/（根目录没有 metadata.yaml，AstrBot 不认）
+4. 装完检查：<plugins>/astrbot_plugin_seer_expert/metadata.yaml 存在才算对
+5. 首次启动会自己下数据（seerapi ≈62 MB / manual_db 15 个库），
+   需要能访问 github.com 和 cnb.cool；下完之前查数据会提示「数据库未加载」
+6. 需要赛尔号小号才能用的功能：查战绩、查阵容、巅峰投票
+   （配置项 seer_account / seer_password，同一个米米号只能一个人在线）
+```
+
+---
+
 ## 长什么样
 
 ### ① 配置图生成
@@ -155,39 +239,32 @@ pvp_20261113190033.db          ← 上游文件名，时间戳一模一样
 | `seer-cli/seer.py` | **独立命令行查询器**，人和 agent 都能用，不依赖 AstrBot |
 | `plugins/astrbot_plugin_seer_expert/_xm/login_tail.txt` | 无头登录必需的协议尾巴，仓库自带；详见[文末说明](#关于-_xmlogin_tailtxt) |
 
-**两个插件互不依赖，装哪个都能用**：
-
-```
-只想查数据          → 装 seer_expert 就够（它自己同步 seerapi / aliases / manual_db）
-还想要奶龙和配置图  → 再装 seer_info
-两个都装            → 数据文件共享同一份，不会重复下载
-```
+**两个插件互不依赖**，装哪个都能用（详细取舍见开头「怎么装」）。
 
 > 早先还有一个 `seer_dsh`（把难题转给 DSH agent）。实测下来和直接问 bot 拉不开差距，
 > 还多一层 150 秒超时风险，已经移除。
 
-### 三步装好
+### 装完检查
 
-```bash
-# 1. 装 AstrBot
-#    https://github.com/AstrBotDevs/AstrBot
+进 AstrBot 的「插件」页，能看到这两个插件、且状态是「已启用」就算装好了：
 
-# 2. 把两个插件目录复制过去
-cp -r plugins/astrbot_plugin_seer_expert <AstrBot>/data/plugins/
-cp -r plugins/astrbot_plugin_seer_info   <AstrBot>/data/plugins/
-
-# 3. 重启 AstrBot
+```
+赛尔知识库            astrbot_plugin_seer_expert   v0.1.0
+赛尔号数据查询插件    astrbot_plugin_seer_info     v1.0.8
 ```
 
-**首次启动后会自动准备数据**：
+**看不到 / 显示加载失败**，按这个查：
 
-| 数据 | 什么时候好 | 说明 |
-|---|---|---|
-| `seerapi.sqlite` / `aliases.sqlite` | 启动约 3 分钟 | 约 62 MB，耐心等 |
-| `manual_db/`（15 个手册库） | 启动约 10 分钟 | 官方词条来源 |
-| `kb.sqlite` | **不会自动生成** | 空库也能跑，只是「玩家结论」那部分查不到 |
+```bash
+# 1. 目录名对不对（不能带 -master / -main 这种后缀）
+ls <AstrBot>/data/plugins/ | grep seer
 
----
+# 2. 关键文件在不在
+ls <AstrBot>/data/plugins/astrbot_plugin_seer_expert/metadata.yaml
+
+# 3. 看日志报什么错
+tail -f <AstrBot>/data/logs/astrbot.log
+```
 
 ## 三个数据源
 
