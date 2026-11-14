@@ -382,6 +382,119 @@ def cmd_lineup(account, password, target: int):
     sock.close()
 
 
+# ── 巅峰限制池投票（2026-11-14 加）────────────────────────────────
+# 协议来源：Murmansk5000/IronsBot 的 headless_seer
+#   cmd 4481 GET_DAILY_RANK_INFO
+#   body = DailyRankParam(key, sub_key, start, end)  → 4 个 u32 大端
+#   key=191 限制池（限2）取前 20；key=192 准限制池（限3）取前 30
+#   响应 = DailyRankList：u32 count + count × (u32 id + i32 score + 16B nick[utf8定长])
+#
+# 这条接口就是「投票数据」的真正来源 —— 游戏里那个榜本来就是玩家投出来的。
+VOTE_KEYS = {191: ("限制池（限2）", 19), 192: ("准限制池（限3）", 29)}
+
+
+_NAME_CACHE: dict[int, str] = {}
+
+
+def _pet_names() -> dict[int, str]:
+    """精灵 id → 名字。查 seerapi.pet，回落手册 pets.db。
+
+    2026-11-14 实测：4481 返回的 16 字节「nick」服务端**根本不填**（全零），
+    说明这个榜的榜项是**精灵**不是玩家 —— 那个字段应该叫「附加名」之类的占位。
+    真正要显示的是把 id 换成精灵名。
+    """
+    global _NAME_CACHE
+    if _NAME_CACHE:
+        return _NAME_CACHE
+    import sqlite3
+    from pathlib import Path
+    here = Path(__file__).resolve()
+    # .../core/data/plugins/astrbot_plugin_seer_expert/_xm/headless.py
+    #   parents[0]=_xm  [1]=插件目录  [2]=plugins  [3]=data ← 这层
+    data_dir = here.parents[3] / "plugin_data"
+    for db, sql in (
+        (data_dir / "astrbot_plugin_seer_info" / "seerapi.sqlite",
+         "select id, name from pet"),
+        (data_dir / "astrbot_plugin_seer_expert" / "manual_db" / "pets.db",
+         "select ID, Name from pets"),
+    ):
+        if not db.is_file():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=3)
+            for pid, nm in con.execute(sql):
+                _NAME_CACHE.setdefault(int(pid), str(nm))
+            con.close()
+        except sqlite3.Error:
+            continue
+    return _NAME_CACHE
+
+
+def _parse_rank_list(body: bytes) -> list[dict]:
+    """解 DailyRankList → [{id, name, score, nick}]。"""
+    if len(body) < 4:
+        return []
+    count = struct.unpack(">I", body[:4])[0]
+    names = _pet_names()
+    off = 4
+    out = []
+    for _ in range(min(count, 200)):        # 防御：count 异常大时截断
+        if off + 24 > len(body):
+            break
+        pid = struct.unpack(">I", body[off:off + 4])[0]
+        score = struct.unpack(">i", body[off + 4:off + 8])[0]
+        raw_nick = body[off + 8:off + 24]
+        nick = raw_nick.split(b"\x00", 1)[0].decode("utf-8", "ignore")
+        out.append({
+            "id": pid,
+            "name": names.get(pid, ""),
+            "score": score,
+            "nick": nick,
+        })
+        off += 24
+    return out
+
+
+def cmd_vote(account, password, sub_key: int = 0, key: int = 191):
+    """查巅峰限制池投票榜。
+
+    key=191 限制池（限2），key=192 准限制池（限3）。
+    sub_key 是期次（例如 20261106），传 0 看服务端默认给哪一期。
+    """
+    label, end = VOTE_KEYS.get(key, ("未知池", 19))
+    sock, ser, uid = login(account, password)
+    print(f"[✓] 查 {label} 投票榜  key={key} sub_key={sub_key} start=0 end={end}\n")
+
+    body = struct.pack(">IIII", key, sub_key, 0, end)
+    got = query(sock, ser, uid, 4481, body, wait=2.5)
+    hit = [g for g in got if g[0] == 4481]
+    if not hit:
+        print("  ✗ 无回包（可能上线受限 / 账号没进过这个榜 / sub_key 不对）")
+        return
+    _cmd, result, rbody = hit[0]
+    print(f"  收到 {len(rbody)}B  result={result}")
+    if DEBUG:
+        print(f"  [DEBUG] {rbody[:120].hex()}")
+    rows = _parse_rank_list(rbody)
+    if not rows:
+        print("  ✗ 解析出 0 条")
+        return
+    # JSON 模式：给插件/脚本调用（python headless.py vote 191 20261030 --json）
+    if "--json" in sys.argv:
+        import json as _json
+        print(_json.dumps({
+            "key": key, "label": label, "sub_key": sub_key,
+            "count": len(rows), "rows": rows,
+        }, ensure_ascii=False))
+        return
+
+    print(f"\n  {label} 投票榜 {len(rows)} 条：")
+    for i, r in enumerate(rows, 1):
+        nm = r["name"] or r["nick"] or f"#{r['id']}"
+        extra = f"  (id {r['id']})" if r["name"] else ""
+        print(f"    {i:>2}. {nm:<18} {r['score']:>5} 票{extra}")
+
+
 def main():
     global DEBUG
     if len(sys.argv) < 2:
@@ -402,6 +515,11 @@ def main():
         cmd_login(account, password)
     elif action == "pvp":
         cmd_pvp(account, password, int(sys.argv[2]) if len(sys.argv) > 2 else 258806935)
+    elif action == "vote":
+        # python headless.py vote [191|192] [sub_key]
+        _k = int(sys.argv[2]) if len(sys.argv) > 2 else 191
+        _sk = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+        cmd_vote(account, password, _sk, _k)
     elif action == "lineup":
         cmd_lineup(account, password, int(sys.argv[2]) if len(sys.argv) > 2 else 258806935)
     else:

@@ -24,6 +24,7 @@ from .core import (
     PetConfigHandler,
     PetHandler,
     TitleHandler,
+    _pet_image_candidates,
     close_renderer,
     configure_render_cache,
     get_renderer,
@@ -69,7 +70,7 @@ from .service import close_shared_session
 _AUTO_GETTERS = (
     ("suit", SuitDataGetter),
     ("equip", EquipDataGetter),
-    ("pet_image", PetSkinDataGetter),
+    ("pet_image", _pet_image_candidates),
     ("pet_info", PetDataGetter),
     ("mintmark", MintmarkDataGetter),
     ("gem", GemDataGetter),

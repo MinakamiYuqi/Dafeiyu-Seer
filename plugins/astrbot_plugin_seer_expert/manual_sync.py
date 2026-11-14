@@ -167,6 +167,15 @@ async def sync(db_dir: str, names: tuple[str, ...] = WANTED) -> dict[str, str]:
                     os.replace(tmp, path)
 
                 await asyncio.to_thread(_atomic_write, dest, data)
+                # 2026-11-14 加：把上游原始文件名落成旁注，
+                # 里面带着数据版本时间戳（pvp_20261113190033.db → 2026-11-13 19:00:33）。
+                # 游戏内「巅峰圣战精灵池」页面顶部显示的就是这个时间，
+                # 没有它就只能拿本地 mtime，会和游戏内对不上（差一个同步延迟）。
+                try:
+                    with open(dest + ".version", "w", encoding="utf-8") as vf:
+                        vf.write(filename)
+                except OSError as exc:
+                    logger.warning("[manual_sync] %s 版本旁注写入失败: %s", prefix, exc)
                 result[prefix] = f"{filename} ({len(data) // 1024} KB)"
             except Exception as exc:  # noqa: BLE001
                 result[prefix] = f"失败 {exc}"

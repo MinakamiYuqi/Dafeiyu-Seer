@@ -18,7 +18,7 @@ from .milk_dragon_handler import MilkDragonHandler
 from .uploader_handler import WhitelistHandler
 from .uploader_store import UploaderStore
 from .misc_handler import MiscHandler
-from .pet_handler import PetHandler
+from .pet_handler import PetHandler, _pet_image_candidates
 from .pet_config_handler import PetConfigHandler
 from .pet_renderer import PET_TEMPLATE, render_pet_info_data
 from .renderer import (
@@ -56,6 +56,7 @@ __all__ = [
     "AnalyzeDescParser",
     "parse_analyze_desc",
     "PetHandler",
+    "_pet_image_candidates",
     "PetConfigHandler",
     "AttributeHandler",
     "EffectHandler",

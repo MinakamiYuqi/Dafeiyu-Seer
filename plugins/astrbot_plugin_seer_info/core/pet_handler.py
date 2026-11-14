@@ -10,6 +10,25 @@ from .pet_renderer import PET_TEMPLATE, render_pet_info_data
 from .renderer import render_to_image
 
 
+def _pet_image_candidates(sessions, arg):
+    """立绘候选：精灵优先，其次精灵自带的皮肤，最后是独立皮肤。
+
+    对齐 Murmansk5000/IronsBot 的 PetQueryService._image_choices：
+    那边 `for pet in pets:` 先把精灵本身作为候选（resource_id = pet.id），
+    再把 `pet.skins` 作为子选项，最后才遍历独立 skin 查询。
+    我们原来只有 PetSkinDataGetter，等于只做了最后一步。
+    """
+    pets = PetDataGetter(sessions, arg)
+    skins = PetSkinDataGetter(sessions, arg)
+    if not skins:
+        return pets
+    if not pets:
+        return skins
+    # 精灵在前：用户问「帝录立绘」时优先给精灵本体，而不是同名皮肤
+    return tuple(pets) + tuple(skins)
+
+
+
 class PetHandler:
     def __init__(self, html_render=None, image_format: str = "jpeg", jpeg_quality: int = 85):
         self._html_render = html_render
@@ -95,10 +114,20 @@ class PetHandler:
             yield event.plain_result(f"发生错误: {e}")
 
     async def pet_image(self, event: AstrMessageEvent, arg: str = ""):
+        """查立绘。
+
+        2026-11-14 修：原来 getter 只给 PetSkinDataGetter（只查 pet_skin 表），
+        没皮肤的精灵就查不到 —— 例如「帝录天锋」(id=4903) 在 pet 表里有
+        resource_id=4903、立绘 4903.png 也能下，但 pet_skin 里 0 条，
+        于是回「未找到匹配的立绘」。参考 Murmansk5000/IronsBot 的
+        PetQueryService._image_choices：它**以精灵为主体**（pet.id 当 resource_id），
+        皮肤是挂在精灵下面的子选项，最后才补一遍独立皮肤查询。
+        这里对齐成同样的优先级：精灵 → 精灵的皮肤 → 其余皮肤。
+        """
         async for result in multi_select_query(
             event,
             arg,
-            getter=PetSkinDataGetter,
+            getter=_pet_image_candidates,
             prepare_result=self._prepare_skin_result,
             label="立绘",
             error_log_name="pet_image",
@@ -106,6 +135,8 @@ class PetHandler:
             yield result
 
     async def _prepare_skin_result(self, skin):
+        # skin 可能是 PetSkinORM，也可能是 PetORM（精灵本体）—— 两者都有
+        # name / resource_id，精灵没有 pet / series 关系，用 getattr 兜住。
         image_bytes = await PetBodyImageGetter.get_bytes(str(skin.resource_id))
         temp_path = save_bytes_to_temp_file(image_bytes)
         lines = [f"💎【{skin.name}】"]

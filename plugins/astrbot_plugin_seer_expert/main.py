@@ -633,7 +633,18 @@ class SeerExpertPlugin(Star):
             if pool_kw:
                 pools = self.kb.pool_list()
                 brief = "｜".join(f"{p['label']} {len(p['pets'])} 只" for p in pools)
-                pieces = [f"【本条涉及巅峰池·概览】{brief}", "要具体名单就调 seer_pool(pool=…)；数据来自手册 pvp.db。"]
+                _pver = ""
+                try:
+                    _pver = self.kb.pool_data_version()
+                except Exception:
+                    _pver = ""
+                _vline = f"（数据版本 {_pver}）" if _pver else ""
+                pieces = [
+                    f"【本条涉及巅峰池·概览】{brief}{_vline}",
+                    "要具体名单就调 seer_pool(pool=…)；数据来自手册 pvp.db。"
+                    "★ 档期/版本只能引用上面这个时间，库里没写的日期不许自己补；"
+                    "pvp.db 的 ban_* 档期字段本来就是空的，说「未标注」即可。",
+                ]
                 for w in pool_kw:
                     hit = self.kb.pool_match(w)
                     if hit:
@@ -2392,12 +2403,18 @@ class SeerExpertPlugin(Star):
                 for p in v["hits"]
             )
         if v["mode"] == "list":
-            return "【巅峰池】" + sep + sep.join(
-                f"- {p['label']}：{len(p['pets'])} 只（截止 {p['deadline'] or '未标注'}）"
+            _ver = v.get("version") or ""
+            _head = f"【巅峰池】数据版本 {_ver}" + sep if _ver else "【巅峰池】" + sep
+            return _head + sep.join(
+                f"- {p['label']}：{len(p['pets'])} 只（档期 {p['deadline'] or '未标注'}）"
                 for p in v["pools"]
             )
         mp = v["matched"]
-        return f"【{mp['label']}】{len(mp['pets'])} 只" + sep + "、".join(mp["pets"])
+        # 2026-11-14：带上真实数据版本。模型以前在档期为空时会自己编「10-30 那期」，
+        # 而 pvp.db 的 ban_* 档期字段本来就是空的。给死数据源，它就不能瞎猜。
+        ver = v.get("version") or ""
+        tail = f"{sep}（数据版本 {ver}）" if ver else f"{sep}（数据源未标注版本）"
+        return f"【{mp['label']}】{len(mp['pets'])} 只" + sep + "、".join(mp["pets"]) + tail
 
 
     @llm_tool(name="seer_doc")
@@ -4808,6 +4825,629 @@ class SeerExpertPlugin(Star):
                 logger.warning("[seer_roster] 阵容图发送失败: %s", exc)
                 return format_roster(data) + f"\n（图没发出去：{exc}）"
         return format_roster(data)
+
+    # ── 夯拉榜（分级榜梗图）──────────────────────────────────
+    def _tier_resolve(self, key) -> dict | None:
+        """把一个名字/id 解析成 {id, name, resource_id}。
+
+        ★ 精确名优先，再走 find_pets。
+          2026-11-13 踩的：直接 find_pets('皮皮') 会返回「赤胆游龙·赵云」，
+          find_pets('小火猴') 会返回「星光·魔焰猩猩」—— 它按「同名多形态取种族值
+          最高」+ 模糊匹配办事，适合「查这只精灵的最强形态」，但不适合榜单：
+          榜上写「小火猴」就该是小火猴，不是它祖宗。
+
+        所以顺序：
+          ① 纯数字 → pet_id 直查
+          ② 精确同名 → 命中即用（皮皮→皮皮、小火猴→小火猴）
+          ③ find_pets → 别名（战螳螂/环源）+ 模糊 + 错字纠正（龙啖→龙琰）
+        """
+        raw = str(key or "").strip()
+        if not raw:
+            return None
+
+        pid = None
+        if raw.isdigit():
+            pid = int(raw)
+        else:
+            rows = self.kb._q("select id from pet where name=? limit 1", (raw,))
+            if rows:
+                pid = int(rows[0][0])
+            if not pid:
+                hits = self.kb.find_pets(raw, limit=1)
+                if hits:
+                    pid = int(hits[0][0])
+        if not pid:
+            return None
+
+        rows = self.kb._q("select id, name, resource_id from pet where id=?", (pid,))
+        if not rows:
+            return None
+        r = rows[0]
+        return {"id": r[0], "name": r[1], "resource_id": r[2] or r[0]}
+
+    # 编号 → 分级（群友常按 1. 2. 3. 这样一档一档说）
+    _TIER_BY_ORDINAL = {
+        "1": "夯", "2": "顶级", "3": "人上人", "4": "NPC", "5": "拉完了",
+        "①": "夯", "②": "顶级", "③": "人上人", "④": "NPC", "⑤": "拉完了",
+        "一": "夯", "二": "顶级", "三": "人上人", "四": "NPC", "五": "拉完了",
+    }
+
+    @classmethod
+    def _tier_parse(cls, spec: str) -> list[dict]:
+        """解析分级榜的输入。
+
+        支持两种写法，可以混着用：
+
+        A. 显式分级（推荐，最不容易错）
+           夯:无极圣武,艾夏拉 顶级:谱尼 NPC:皮皮 拉完了:小火猴
+           分隔：行内用冒号（中英都行），同级精灵用逗号/顿号/斜杠，
+                 行与行用空格/分号/竖线/换行。
+
+        B. 编号顺序（群友常这么列）
+           1.无极圣武,艾夏拉 2.谱尼 3.环源 4.皮皮 5.小火猴
+           1、xxx / 1)xxx / ①xxx / 一、xxx 都认。
+           编号 → 档位固定按 1=夯 2=顶级 3=人上人 4=NPC 5=拉完了。
+
+        纯精灵列表（`无极圣武 谱尼 环源`）解析不出档位，返回空列表 ——
+        这种情况调用方该去问用户怎么分档，别瞎猜。
+        """
+        import re as _re
+
+        text = str(spec or "").strip()
+        if not text:
+            return []
+
+        # ── 先试「编号顺序」：整段里出现 1./1、/1)/① 这类序号 ──
+        # 三种写法要求不同：
+        #   · 阿拉伯数字后面必须有标点（1. / 1、/ 1) / 1:）
+        #   · 圈号 ①②③ 自己就是序号，后面不用标点
+        #   · 中文数字要带顿号/点号（一、/ 一.），否则「一」会和正文混淆
+        num_pat = _re.compile(
+            # 阿拉伯数字 / 中文数字：前面必须有分隔符，否则「无极圣武2」会被误切
+            r"(?:^|[\s;|；，,])"
+            r"(?:(?P<arabi>[1-5１２３４５])\s*[.．、)\）：:]"
+            r"|(?P<hans>[一二三四五])\s*[、.．,，])"
+            r"\s*"
+            # 圈号自己就是分隔符，紧贴汉字也认（①无极圣武②谱尼）
+            r"|(?P<circ>[①②③④⑤])\s*"
+        )
+        marks = list(num_pat.finditer(text))
+        if len(marks) >= 2:
+            rows: list[dict] = []
+            seen_tier = set()
+            for idx, m in enumerate(marks):
+                ordinal = m.group("arabi") or m.group("circ") or m.group("hans") or ""
+                ordinal = ordinal.translate(str.maketrans("１２３４５", "12345"))
+                tier = cls._TIER_BY_ORDINAL.get(ordinal)
+                if tier is None:
+                    continue
+                start = m.end()
+                end = marks[idx + 1].start() if idx + 1 < len(marks) else len(text)
+                body = text[start:end].strip().rstrip(";；|")
+                pets = [p.strip() for p in _re.split(r"[,，、/／\s]+", body) if p.strip()]
+                pets = [p for p in pets if _re.search(r"[\w\u4e00-\u9fff]", p)]
+                if not pets:
+                    continue
+                if tier in seen_tier:
+                    rows[[r["tier"] for r in rows].index(tier)]["pets"].extend(pets)
+                else:
+                    rows.append({"tier": tier, "pets": pets})
+                    seen_tier.add(tier)
+            if rows:
+                return rows
+
+        # ── 再试「显式分级」：夯:xxx 顶级:yyy ──
+        chunks = _re.split(r"[\s;|；]+", text)
+        rows = []
+        for chunk in chunks:
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            m = _re.match(r"^(.{1,6}?)[:：](.+)$", chunk)
+            if not m:
+                continue
+            tier, rest = m.group(1).strip(), m.group(2).strip()
+            pets = [p.strip() for p in _re.split(r"[,，、/／]+", rest) if p.strip()]
+            if pets:
+                rows.append({"tier": tier, "pets": pets})
+        return rows
+
+    @llm_tool(name="seer_tier_list")
+    async def seer_tier_list(
+        self, event: AstrMessageEvent, tiers: str, title: str = "", subtitle: str = ""
+    ) -> str:
+        """画一张「从夯到拉」的精灵分级榜（梗图），把精灵按强度/风评排进五档。
+
+        # 什么时候用
+        群友说「排个榜」「做个梯度图」「盘点谁强谁弱」「从夯到拉」「哪些是神哪些是下水道」
+        「谁是版本答案」「哪些已经废了」时用这个。**不需要任何人记指令**，你判断该排就排。
+
+        # 标题按群友的话来（重要）
+        title 不要固定写「从夯到拉」，要看群友问的是什么，照着那个意思起：
+          群友「盘点跌落神坛的」   → title「从夯到拉，盘点赛尔号那些跌落神坛的精灵」
+          群友「现在版本谁最强」   → title「当前版本梯度榜」
+          群友「这几个哪个值得练」 → title「练谁不练谁：本次候选梯度」
+          群友「新手打PVP带哪些」  → title「PVP 上手梯度（新手向）」
+        subtitle 用来补一句限定：「（限 PVP）」「（按 11 月版本）」「（群友投票）」。
+        群友没给语气就留空，用默认「从夯到拉」。
+
+        # 选谁进榜也按群友说的来
+        群友点名了就排他们点的；说「随便排几个」才自己挑当前版本的典型精灵。
+        **别自作主张塞进一堆没人提的精灵** —— 榜是给群友看的，不是给你刷的。
+
+        # 你的核心职责：把群友的任意说法转成标准格式
+        群友不会按格式说。他们可能这样列出：
+          ① 编号顺序      「1.无极圣武 2.谱尼 3.环源」
+          ② 编号+多只     「1.无极圣武、艾夏拉 2.谱尼、灵巢」
+          ③ 中文顿号      「一、无极圣武 二、谱尼」
+          ④ 纯列表无分档  「无极圣武 谱尼 环源」
+          ⑤ 口语评价      「无极圣武是神，谱尼还行，皮皮基本废了」
+          ⑥ 带情绪        「这版本艾夏拉烂完了，无极圣武还是爹」
+        **你要先自己判断每只该进哪一档，再转成**
+          `夯:无极圣武 顶级:谱尼 拉完了:皮皮`
+        编号 1-5 按顺序对应 夯/顶级/人上人/NPC/拉完了。
+        拿不准群体共识的（比如某只没听过风评）就放进「NPC」，别硬吹成夯。
+        完全看不出谁强谁弱的纯列表，先用 kb 的种族值/技能判断一个大致梯度，
+        或直接问群友「你是想按强度排还是按版本风评排」。
+
+        # 五档（从高到低，写错会自动纠正）
+        夯 / 顶级 / 人上人 / NPC / 拉完了
+        也接受别名：神·幻神·T0·S → 夯；T1·A → 顶级；T2·B → 人上人；
+                    普通·T3 → NPC；拉·下水道·T4 → 拉完了
+
+        # 精灵名
+        支持正式名、简称、俗称（走别名表）、错字（龙啖→龙琰）。
+        查不到的会画成占位还在图上标名字，不会整张失败。
+        **排完在文字里说一句「XX 没查到，用了占位」**。
+
+        Args:
+            tiers(string): 分级与精灵。格式 `夯:精灵A,精灵B 顶级:精灵C NPC:精灵D 拉完了:精灵E`。分级别用冒号，同级精灵用逗号，行与行用空格分开
+            title(string): 图顶部标题。**按群友问的意思起，别固定写「从夯到拉」**；留空则用默认
+            subtitle(string): 标题下的小字限定，如「（限 PVP）」「（11月版本）」，可留空
+        """
+        rows = self._tier_parse(tiers)
+        if not rows:
+            return (
+                "没解析出分级。格式要写成 `夯:无极圣武,艾夏拉 顶级:谱尼 NPC:皮皮 拉完了:小火猴`，"
+                "分级别用冒号、同级精灵用逗号、行与行用空格分开。"
+            )
+
+        # 先解析一遍，收集查不到的，好用文字回报
+        resolved: dict[str, list[dict]] = {}
+        missing: list[str] = []
+        for row in rows:
+            items = []
+            for name in row["pets"]:
+                meta = self._tier_resolve(name)
+                if meta is None:
+                    missing.append(name)
+                    items.append({"name": name, "id": None})
+                else:
+                    items.append({"name": meta["name"], "id": meta["id"]})
+            resolved.setdefault(row["tier"], []).extend(items)
+
+        merged_rows = [{"tier": k, "pets": v} for k, v in resolved.items()]
+
+        def lookup(key):
+            return self._tier_resolve(key)
+
+        try:
+            from .render_tier_list import render_tier_list
+            data = await render_tier_list(
+                merged_rows,
+                lookup=lookup,
+                title=title or "从夯到拉",
+                subtitle=subtitle or "",
+                footer_left="赛尔号 · 神代·欧鲸鲸",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[seer_tier_list] 渲染失败: %s", exc)
+            return f"榜单渲染失败：{exc}"
+
+        import tempfile
+
+        fd, path = tempfile.mkstemp(prefix="seer_tier_", suffix=".jpg")
+        os.close(fd)
+        with open(path, "wb") as f:
+            f.write(data)
+
+        sent = False
+        try:
+            from astrbot.core.message.message_result import MessageChain  # 兼容旧路径
+        except Exception:
+            try:
+                from astrbot.core.message.message_event_result import MessageChain
+            except Exception:
+                MessageChain = None  # type: ignore
+        if MessageChain is not None:
+            try:
+                chain = MessageChain(chain=[ImageComp.fromFileSystem(path)])
+                await self.context.send_message(event.unified_msg_origin, chain)
+                sent = True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[seer_tier_list] 榜单图发送失败: %s", exc)
+
+        # 文字部分：只报状态，不重复图里的内容
+        total = sum(len(v) for v in resolved.values())
+        line = f"榜单画好了，{len(resolved)} 档共 {total} 只。"
+        if missing:
+            line += "没查到的用了占位：" + "、".join(missing[:6])
+            if len(missing) > 6:
+                line += f" 等 {len(missing)} 只"
+        if not sent:
+            line += f"（图没发出去，文件在 {path}）"
+        return line
+
+    # ── 巅峰圣战精灵池出图（2026-11-14 加）───────────────────────────
+    # 和 seer_pool 的分工：
+    #   seer_pool       文本查询（限2 有哪些 / 某精灵在哪些池）
+    #   seer_pool_card  出图（竞技一整张 / 专家 / 大师），照手册那个页面的样子
+    # 数据源同一个：manual_db/pvp.db
+
+    def _pool_groups_for_card(self) -> dict[str, list[dict]]:
+        """读 pvp.db 成 {池名: [{id}]}，供渲染器用。"""
+        import json as _json
+        groups: dict[str, list[dict]] = {}
+        try:
+            rows = self.kb._manual_q("pvp", "select name, pet from pvp")
+        except Exception:
+            rows = []
+        for name, pets in rows or []:
+            try:
+                ids = _json.loads(str(pets or "[]").replace("'", '"'))
+            except Exception:
+                ids = []
+            groups[str(name)] = [{"id": int(i)} for i in ids]
+        return groups
+
+    def _pool_lookup(self, pid):
+        """精灵 id → {name, resource_id}。走 seerapi，回落手册 pets.db。"""
+        try:
+            r = self.kb._q("select id, name, resource_id from pet where id=?", (int(pid),))
+            if r:
+                return {"name": r[0][1], "resource_id": int(r[0][2] or r[0][0])}
+        except Exception:
+            pass
+        try:
+            r = self.kb._manual_q("pets", "select ID, Name from pets where ID=?", (int(pid),))
+            if r:
+                return {"name": r[0][1], "resource_id": int(pid)}
+        except Exception:
+            pass
+        return None
+
+    async def _render_pool(self, mode: str):
+        """渲染一张池子图，返回 (bytes, 错误信息)。"""
+        from .render_pool_card import normalize_mode, render_pool_card
+        m = normalize_mode(mode) or "arena"
+        groups = self._pool_groups_for_card()
+        if not groups:
+            return None, "手册 pvp.db 里没有池子数据，先跑一次手册同步。"
+        try:
+            data = await render_pool_card(
+                m,
+                groups=groups,
+                lookup=self._pool_lookup,
+                version=self.kb.pool_data_version(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[pool_card] 渲染失败 mode=%s: %s", m, exc, exc_info=True)
+            return None, f"池子图渲染失败：{exc}"
+        return data, ""
+
+    async def _send_image(self, event, data: bytes, prefix: str) -> bool:
+        """把图片字节发到当前会话。返回是否成功。"""
+        import tempfile
+        fd, path = tempfile.mkstemp(prefix=prefix, suffix=".jpg")
+        os.close(fd)
+        with open(path, "wb") as f:
+            f.write(data)
+        try:
+            from astrbot.core.message.message_result import MessageChain
+        except Exception:
+            try:
+                from astrbot.core.message.message_event_result import MessageChain
+            except Exception:
+                MessageChain = None  # type: ignore
+        if MessageChain is None:
+            return False
+        try:
+            from astrbot.api.message_components import Image as ImageComp
+            chain = MessageChain(chain=[ImageComp.fromFileSystem(path)])
+            await self.context.send_message(event.unified_msg_origin, chain)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[pool_card] 发送失败: %s", exc)
+            return False
+
+    @llm_tool(name="seer_pool_card")
+    async def seer_pool_card(self, event: AstrMessageEvent, mode: str = "") -> str:
+        """画一张「巅峰圣战精灵池」的图，照游戏内那个页面的样子。
+
+        # 什么时候用
+        群友说「看看巅峰池」「竞技池有哪些」「专家池」「大师池什么价」
+        「池子榜」「发张图看看」时用它。**比 seer_pool 的纯文字更适合看全貌。**
+
+        # 三个模式（对应游戏内三个 tab）
+          「竞技」「限制」「巅峰池」  → 竞技限制池：禁止池(限0) + 限制池(限2) + 准限制池(限3)
+          「专家」                   → 专家禁用池
+          「大师」「竞技点」          → 大师竞技点（35/20/10/6/0 点分档）
+
+        mode 留空按「竞技」处理。
+
+        # 数据来源
+        手册 pvp.db（和游戏内页面同源，图上有数据版本时间戳）。
+        **不要自己补日期** —— 图上写的就是真的。
+        """
+        data, err = await self._render_pool(mode or "arena")
+        if data is None:
+            return err
+        sent = await self._send_image(event, data, "seer_pool_")
+        from .render_pool_card import POOL_MODES, normalize_mode
+        m = normalize_mode(mode) or "arena"
+        label = POOL_MODES[m]["label"]
+        ver = self.kb.pool_data_version()
+        tail = f"（数据版本 {ver}）" if ver else ""
+        if sent:
+            return f"{label}的图画好了{tail}"
+        return f"{label}的图渲染出来了但没发出去，数据版本 {ver}"
+
+    # ── 巅峰投票榜出图（2026-11-14 加）─────────────────────────────
+    # 数据来自游戏协议 cmd 4481（seer_vote），不是本地库。
+    # 实测规律：限2 和限3 交替投票，一期只投一个池。
+    #   20261030 期 → 限2 有数据
+    #   20261106 期 → 限3 有数据
+    # 服务端 sub_key=0 不给默认期次，所以只能自动探测（probe_latest，约 0.5s）。
+
+    async def _render_vote(self, mode: str):
+        """查+画一张投票榜。返回 (bytes|None, 数据, 错误)。"""
+        from .render_vote_card import render_vote_card
+        from .seer_vote import VOTE_KEYS, probe_latest
+
+        m = str(mode or "").strip()
+        # 说法 → key
+        key = 191
+        if any(w in m for w in ("限3", "限三", "准限", "192")):
+            key = 192
+        elif any(w in m for w in ("限2", "限二", "限俩", "191")):
+            key = 191
+        elif "限" in m or not m:
+            key = 191            # 默认限2
+        if "限3" in m or "限三" in m or "准限" in m:
+            key = 192
+        label = VOTE_KEYS.get(key, ("", 0))[0]
+
+        data = await probe_latest(key)
+        if data.get("error"):
+            return None, data, data["error"]
+        rows = data.get("rows") or []
+        if not rows:
+            tried = len(data.get("tried") or [])
+            return None, data, (
+                f"{label} 投票榜目前没有数据（试了 {tried} 个期次）。\n"
+                "池子刚更新时投票还没开始，等官方开投票再来。"
+            )
+
+        from .seer_vote import _fmt_period
+        note = (
+            "限2 和限3 是交替投票的，一期只投一个池；"
+            "榜上票数最高的前 12 名（限2）/ 前 25 名（限3）就是下一期生效的池子。"
+        )
+        if not data.get("current_open"):
+            note = (
+                f"⚠ 当期（{_fmt_period(data.get('current_period') or 0)}）的投票还没开始，"
+                f"这张是最近一期有数据的 {_fmt_period(data.get('sub_key') or 0)} 期。\n"
+                + note
+            )
+        try:
+            blob = await render_vote_card(
+                key, rows,
+                sub_key=data.get("sub_key") or 0,
+                lookup=self._pool_lookup,
+                note=note,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[vote_card] 渲染失败 key=%s: %s", key, exc, exc_info=True)
+            return None, data, f"投票榜图渲染失败：{exc}"
+        return blob, data, ""
+
+    @llm_tool(name="seer_vote")
+    async def seer_vote(self, event: AstrMessageEvent, pool: str = "") -> str:
+        """查巅峰圣战投票榜（玩家投票结果），直接出一张排名图。
+
+        # 什么时候用
+        群友说「看看投票」「巅峰投票」「投票榜」「限2 投得怎么样」「限3 票数」
+        「谁票最高」时用它。**这是玩家投票，不是官方池子名单**
+        （官方名单用 seer_pool）。
+
+        # 参数
+        pool: 「限2」「限3」或留空。留空默认限2。
+              **注意：限2 和限3 是交替投票的**，一期只投一个池。
+              如果问的池子当期没投，会自动找到最近一期投过它的。
+
+        # 数据
+        游戏协议 cmd 4481 的日榜，实时拉取（不是本地缓存）。
+        图上有期次日期和票数条形。
+        """
+        blob, data, err = await self._render_vote(pool)
+        if blob is None:
+            return err
+        sent = await self._send_image(event, blob, "seer_vote_")
+        from .seer_vote import format_vote
+        label = data.get("label") or ""
+        period = data.get("sub_key") or 0
+        from .seer_vote import _fmt_period
+        head = f"{label} 投票榜（{_fmt_period(period)} 期，{len(data.get('rows') or [])} 项）"
+        if not data.get("current_open"):
+            head += f"（当期 {_fmt_period(data.get('current_period') or 0)} 还没开投票，这是最近一期）"
+        if sent:
+            return head + "\n图已发出。前三名：" + "、".join(
+                f"{r.get('name') or r.get('id')}({r.get('score')}票)"
+                for r in (data.get("rows") or [])[:3]
+            )
+        # 图没发出去就退化成文字
+        return head + "\n" + format_vote(data, limit=10)
+
+    @filter.command("巅峰投票", alias={"投票榜", "投票"})
+    async def cmd_vote_card(self, event: AstrMessageEvent):
+        """巅峰圣战投票榜出图：/巅峰投票 [限2|限3]"""
+        text = (getattr(event, "message_str", "") or "").strip()
+        arg = text
+        for kw in ("巅峰投票", "投票榜", "投票"):
+            if kw in arg:
+                arg = arg.split(kw, 1)[-1]
+                break
+        arg = arg.strip().lstrip("：: ").strip()
+        blob, data, err = await self._render_vote(arg)
+        if blob is None:
+            yield event.plain_result(err)
+            return
+        sent = await self._send_image(event, blob, "seer_vote_cmd_")
+        from .seer_vote import format_vote
+        label = data.get("label") or ""
+        period = data.get("sub_key") or 0
+        from .seer_vote import _fmt_period
+        tail = "" if data.get("current_open") else (
+            f"（当期 {_fmt_period(data.get('current_period') or 0)} 还没开投票，"
+            f"这是最近一期 {_fmt_period(period)}）"
+        )
+        if sent:
+            yield event.plain_result(f"{label} 投票榜（{_fmt_period(period)} 期）{tail}")
+        else:
+            yield event.plain_result(
+                f"{label} 投票榜（{_fmt_period(period)} 期）的图没发出去，先给你文字版：\n"
+                + format_vote(data, limit=10)
+            )
+
+    @filter.command("巅峰池", alias={"竞技池", "专家池", "大师池", "圣战池"})
+    async def cmd_pool_card(self, event: AstrMessageEvent):
+        """巅峰圣战精灵池出图：/巅峰池 竞技 | 专家 | 大师"""
+        text = (getattr(event, "message_str", "") or "").strip()
+        arg = text
+        for kw in ("巅峰池", "竞技池", "专家池", "大师池", "圣战池"):
+            if kw in arg:
+                arg = arg.split(kw, 1)[-1]
+                break
+        arg = arg.strip().lstrip("：: ").strip()
+        if not arg:
+            # 没给参数：默认出竞技
+            arg = "竞技"
+        from .render_pool_card import normalize_mode
+        m = normalize_mode(arg)
+        if m is None:
+            yield event.plain_result(
+                "用法：/巅峰池 竞技 ｜ 专家 ｜ 大师\n"
+                "  竞技 → 禁止池(限0) + 限制池(限2) + 准限制池(限3)\n"
+                "  专家 → 专家禁用池\n"
+                "  大师 → 大师竞技点（35/20/10/6/0 点）\n"
+                "纯文字查询用 /池子 或直接问「限2 有哪些」。"
+            )
+            return
+        data, err = await self._render_pool(m)
+        if data is None:
+            yield event.plain_result(err)
+            return
+        sent = await self._send_image(event, data, "seer_pool_cmd_")
+        from .render_pool_card import POOL_MODES
+        label = POOL_MODES[m]["label"]
+        ver = self.kb.pool_data_version()
+        if sent:
+            yield event.plain_result(f"{label}（数据版本 {ver}）" if ver else label)
+        else:
+            yield event.plain_result(f"{label}的图没发出去，可以重试一次。")
+
+    @filter.command("夯拉榜", alias={"榜单", "排榜", "梯度图"})
+    async def cmd_tier_list(self, event: AstrMessageEvent):
+        """直接打字排榜：/夯拉榜 夯:精灵A,精灵B 顶级:精灵C ...
+
+        和 seer_tier_list 工具共用同一套解析与渲染，区别只是入口：
+        工具给模型调，命令给人手打。
+        """
+        text = (getattr(event, "message_str", "") or "").strip()
+        # 去掉命令词本身（夯拉榜 / 榜单 / 排榜 / 梯度图，可能带 / 前缀）
+        spec = text
+        for kw in ("夯拉榜", "榜单", "排榜", "梯度图"):
+            if kw in spec:
+                spec = spec.split(kw, 1)[-1]
+                break
+        spec = spec.strip()
+
+        if not spec:
+            yield event.plain_result(
+                "用法：/夯拉榜 夯:精灵A,精灵B 顶级:精灵C NPC:精灵D 拉完了:精灵E\n"
+                "五档：夯 / 顶级 / 人上人 / NPC / 拉完了（也认 T0-S / T1-A / T2-B / T3 / T4-下水道）\n"
+                "想自定义标题就在前面加一段，用 | 隔开：\n"
+                "  /夯拉榜 盘点跌落神坛的 | 夯:无极圣武 拉完了:小火猴\n"
+                "例：/夯拉榜 夯:无极圣武,艾夏拉 顶级:谱尼 NPC:皮皮 拉完了:小火猴"
+            )
+            return
+
+        # 标题可以用 `|` 分隔放在最前面：`/夯拉榜 盘点跌落神坛的 | 夯:xxx`
+        custom_title = ""
+        if "|" in spec:
+            head, tail = spec.split("|", 1)
+            custom_title = head.strip()
+            spec = tail.strip()
+        elif "｜" in spec:
+            head, tail = spec.split("｜", 1)
+            custom_title = head.strip()
+            spec = tail.strip()
+
+        rows = self._tier_parse(spec)
+        if not rows:
+            yield event.plain_result(
+                "没解析出分级。要写成 `夯:精灵A,精灵B 顶级:精灵C`——"
+                "分级别用冒号、同级精灵用逗号、行与行用空格分开。"
+            )
+            return
+
+        resolved: dict[str, list[dict]] = {}
+        missing: list[str] = []
+        for row in rows:
+            items = []
+            for name in row["pets"]:
+                meta = self._tier_resolve(name)
+                if meta is None:
+                    missing.append(name)
+                    items.append({"name": name, "id": None})
+                else:
+                    items.append({"name": meta["name"], "id": meta["id"]})
+            resolved.setdefault(row["tier"], []).extend(items)
+
+        try:
+            from .render_tier_list import render_tier_list
+            data = await render_tier_list(
+                [{"tier": k, "pets": v} for k, v in resolved.items()],
+                lookup=self._tier_resolve,
+                title=custom_title or "从夯到拉",
+                subtitle="",
+                footer_left="赛尔号 · 神代·欧鲸鲸",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[cmd_tier_list] 渲染失败: %s", exc)
+            yield event.plain_result(f"榜单渲染失败：{exc}")
+            return
+
+        import tempfile
+
+        fd, path = tempfile.mkstemp(prefix="seer_tier_", suffix=".jpg")
+        os.close(fd)
+        with open(path, "wb") as f:
+            f.write(data)
+        try:
+            yield event.image_result(path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[cmd_tier_list] 发图失败: %s", exc)
+            yield event.plain_result(f"图没发出去（{exc}），文件在 {path}")
+            return
+
+        total = sum(len(v) for v in resolved.values())
+        line = f"排好了：{len(resolved)} 档共 {total} 只。"
+        if missing:
+            line += "没查到的用了占位：" + "、".join(missing[:6])
+            if len(missing) > 6:
+                line += f" 等 {len(missing)} 只"
+        yield event.plain_result(line)
 
     async def terminate(self):
         task = getattr(self, "_proxy_guard_task", None)
