@@ -5,7 +5,7 @@ from functools import partial
 
 import aiohttp
 import astrbot.api.message_components as Comp
-from astrbot.api import logger
+from astrbot.api import logger, llm_tool
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.custom_filter import CustomFilter
@@ -679,6 +679,529 @@ class SeerInfoPlugin(Star):
                 "给我", "改成", "改一下", "拉满", "换一下", "配一下", "新")
     # 明显是「画图/生图」的，一律让给 gemini 那条路，别抢
     _DRAW_WORDS = ("生图", "画一张", "画个", "改图", "切图", "画风", "手办化", "插画")
+
+
+    # ═══ 以下是模型可自行调用的工具（2026-11-15 加）═══════════════════
+    # 原本这三样只有 @filter.command，用户不带斜杠、或私聊直接问，模型无从下手。
+    # 现在补成 llm_tool，工具描述里写清"什么时候该用"，模型自己判断。
+
+    @llm_tool(name="seer_preview")
+    async def seer_preview(self, event: AstrMessageEvent) -> str:
+        """查赛尔号【下周预告】—— 官方放出的下一周更新预告图。
+
+        # 什么时候用
+        群友问「下周更新什么」「下周预告」「下期出什么精灵」「预告图」「有什么新活动」
+        「下个更新是什么时候」时用它。
+
+        # 说明
+        预告是官方发布的图片，直接发到当前会话，不需要用户再打指令。
+        如果群友只是问「今天更新了吗」那种时效性问题，用 seer_server_status 更合适。
+        """
+        url = ("https://cnb.cool/HurryWang/seer-unity-preview-img-dumper-cnb/"
+               "-/git/raw/master/img/preview.png")
+        try:
+            import astrbot.api.message_components as Comp
+            try:
+                from astrbot.core.message.message_result import MessageChain
+            except Exception:
+                from astrbot.core.message.message_event_result import MessageChain
+            chain = MessageChain(chain=[Comp.Image.fromURL(url)])
+            await self.context.send_message(event.unified_msg_origin, chain)
+            return "下周预告图已经发出来了（来源：seer-unity-preview-img-dumper）"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[seer_preview] 发图失败: %s", exc)
+            return f"预告图的地址是 {url} ，但这次没发出去（{type(exc).__name__}），可以重试一次。"
+
+    @llm_tool(name="seer_server_status")
+    async def seer_server_status(self, event: AstrMessageEvent) -> str:
+        """查赛尔号服务器【开服 / 维护状态】—— 现在能不能登录。
+
+        # 什么时候用
+        群友问「开服了吗」「服务器崩了吗」「怎么进不去」「在维护吗」「关服了？」
+        「今天更新到几点」时用它。
+
+        # 说明
+        读的是官方公告接口 unity-notice.61.com 的实时内容。
+        有维护公告就把公告原文返回；没有公告就说明当前没有维护、服务器正常。
+        **这个结果是实时的，不要自己推测开服时间。**
+        """
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get("https://unity-notice.61.com/unity_notice/")
+                resp.raise_for_status()
+                data = resp.json()
+            for item in data:
+                if item.get("type") == 3:
+                    text = re.sub(r"<[^>]*>", "", item.get("text", "") or "")
+                    text = text.replace(chr(92) + "n", chr(10)).strip()
+                    if text:
+                        return f"【官方维护公告】\n{text}"
+            return "官方公告接口里没有维护公告，服务器当前正常，可以登录。"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[seer_server_status] 查询失败: %s", exc)
+            return (f"开服状态接口这次没连上（{type(exc).__name__}），"
+                    f"无法确认是否在维护。直接让群友打开游戏试一下比猜更准。")
+
+    @llm_tool(name="seer_player_config")
+    async def seer_player_config(
+        self, event: AstrMessageEvent, pet: str, index: int = 0
+    ) -> str:
+        """查【群友投稿】的精灵配置图 —— 别人已经配好、截图上传到图库的现成方案。
+
+        # 什么时候用
+        群友问「XX 怎么配」「有没有 XX 的配置图」「看看别人怎么配的」
+        「XX 的攻略配置」「抄一下作业」时用它。
+
+        # 和另一个工具的区别（重要，别调错）
+        · seer_player_config（本工具）= 查**群友投稿的截图**，别人配好的
+        · seer_config_card         = **按刻印现算**一张数值表
+        群友要「看别人怎么配的」用本工具；要「按我给的刻印算一张」用 seer_config_card。
+
+        # 两段式：先清单，后发图
+        第一次调用（index 不传或传 0）→ 返回**文字清单**：一共几套、每套谁传的、备注是什么。
+        群友说「看第 2 套」「发第一套」时，再调用一次并传 index=2。
+
+        这样不浪费图片配额，群友也能先知道有哪些选择。
+
+        # 参数
+        pet   精灵名或 ID
+        index 要看第几套（从 1 开始）。0 或不传 = 只列清单不发图。
+        """
+        if not db_manager.is_database_loaded("seerapi"):
+            return "❌ 数据库还没加载完，等一会再问。"
+
+        handler = self._pet_config_handler
+        name = (pet or "").strip()
+        if not name:
+            return "❌ 要查哪只精灵？把精灵名告诉我。"
+
+        try:
+            pets, matched = handler._resolve_pets(name)
+        except Exception as exc:  # noqa: BLE001
+            return f"查配置图时出错：{type(exc).__name__}: {exc}"
+        if not pets:
+            return f"库里没有叫「{name}」的精灵，可能名字不对或者还没收录。"
+        if len(pets) > 1:
+            names = "、".join(f"{p.name}({p.id})" for p in pets[:8])
+            return (f"「{name}」匹配到 {len(pets)} 只：{names}"
+                    f"{'…' if len(pets) > 8 else ''}。请让群友报完整名字（或 ID）再查。")
+
+        target = pets[0]
+        try:
+            variants = handler.variants(int(target.id))
+        except Exception as exc:  # noqa: BLE001
+            return f"读配置图目录出错：{type(exc).__name__}: {exc}"
+        if not variants:
+            return (f"【{target.name}】（{target.id}）目前还没有群友投稿的配置图。"
+                    f"想看现算的，可以用 seer_config_card。")
+
+        # ── 第二段：群友点名要某套，发图 ──
+        if index and index > 0:
+            hit = next((v for v in variants if v.index == index), None)
+            if hit is None:
+                nums = "、".join(str(v.index) for v in variants)
+                return (f"【{target.name}】没有第 {index} 套。"
+                        f"现有的是第 {nums} 套。")
+            import astrbot.api.message_components as Comp
+            try:
+                from astrbot.core.message.message_result import MessageChain
+            except Exception:
+                from astrbot.core.message.message_event_result import MessageChain
+            try:
+                chain = MessageChain(chain=[
+                    Comp.Image.fromFileSystem(str(hit.image)),
+                    Comp.Plain(handler._caption(target, hit, len(variants))),
+                ])
+                await self.context.send_message(event.unified_msg_origin, chain)
+                return (f"【{target.name}】第 {index}/{len(variants)} 套配置图已发出。")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[seer_player_config] 发图失败: %s", exc)
+                return f"第 {index} 套存在，但这次没发出去（{type(exc).__name__}），可以重试一次。"
+
+        # ── 第一段：只列清单 ──
+        lines = [f"【{target.name}】（{target.id}）共 {len(variants)} 套群友投稿的配置图："]
+        for v in variants:
+            try:
+                detail = " · ".join(v.meta.lines()) if v.meta else ""
+            except Exception:
+                detail = ""
+            lines.append(f"  {v.index}. {detail}" if detail else f"  {v.index}. （无备注）")
+        lines.append("")
+        lines.append("要看哪一套？说「看第 N 套」就行，我把图发出来。")
+        return "\n".join(lines)
+
+
+    async def seer_player_config(self, event: AstrMessageEvent, pet: str) -> str:
+        """查【群友投稿】的精灵配置图 —— 别人已经配好、截图上传到图库的现成方案。
+
+        # 什么时候用
+        群友问「XX 怎么配」「有没有 XX 的配置图」「看看别人怎么配的」
+        「XX 的攻略配置」「抄一下作业」时用它。
+
+        # 和另一个工具的区别（重要，别调错）
+        · seer_player_config（本工具）= 查**群友投稿的截图**，图片是别人配好的
+        · seer_config_card         = **自己按刻印现算**一张配置图
+        群友要「看别人怎么配的」用本工具；要「按我给的刻印算一张」用 seer_config_card。
+
+        # 参数
+        pet: 精灵名或 ID。查不到会说明是没这只精灵、还是这只没有投稿。
+        """
+        if not db_manager.is_database_loaded("seerapi"):
+            return "❌ 数据库还没加载完，等一会再问。"
+
+        handler = self._pet_config_handler
+        name = (pet or "").strip()
+        if not name:
+            return "❌ 要查哪只精灵的配置图？把精灵名告诉我。"
+
+        try:
+            pets, matched = handler._resolve_pets(name)
+        except Exception as exc:  # noqa: BLE001
+            return f"查配置图时出错：{type(exc).__name__}: {exc}"
+        if not pets:
+            return f"库里没有叫「{name}」的精灵，可能名字不对或者还没收录。"
+        if len(pets) > 1:
+            names = "、".join(f"{p.name}({p.id})" for p in pets[:8])
+            return (f"「{name}」匹配到 {len(pets)} 只：{names}"
+                    f"{'…' if len(pets) > 8 else ''}。请让群友报完整名字（或 ID）再查。")
+
+        target = pets[0]
+        try:
+            variants = handler.variants(int(target.id))
+        except Exception as exc:  # noqa: BLE001
+            return f"读配置图目录出错：{type(exc).__name__}: {exc}"
+        if not variants:
+            return (f"【{target.name}】（{target.id}）目前还没有群友投稿的配置图。"
+                    f"想看现算的，可以用 seer_config_card。")
+
+        # 发前 3 张，附上传者信息
+        import astrbot.api.message_components as Comp
+        try:
+            from astrbot.core.message.message_result import MessageChain
+        except Exception:
+            from astrbot.core.message.message_event_result import MessageChain
+
+        sent = 0
+        parts = []
+        for v in variants[:3]:
+            try:
+                chain = MessageChain(chain=[
+                    Comp.Image.fromFileSystem(str(v.image)),
+                    Comp.Plain(handler._caption(target, v, len(variants))),
+                ])
+                await self.context.send_message(event.unified_msg_origin, chain)
+                sent += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[seer_player_config] 第 %s 张发送失败: %s", v.index, exc)
+                parts.append(f"第 {v.index} 套发送失败")
+
+        head = (f"【{target.name}】共 {len(variants)} 套群友投稿的配置图"
+                f"{'，已发前 ' + str(sent) + ' 套' if sent else ''}。")
+        if len(variants) > sent:
+            head += f" 还有 {len(variants) - sent} 套没发（一次最多发 3 套）。"
+        if parts:
+            head += " " + "；".join(parts)
+        return head
+
+
+
+    # ═══ 素材发送（2026-11-16 加）═══════════════════════════════════════
+    # service.py 里有 12 个 GetImage 实例，各自管一种素材的 CDN 模板。
+    # 但原本只有 /刻印 /套装 /部件 /称号 这些命令在用，模型调不到。
+    # 这里包一层统一入口，让模型能按 kind 直接发素材图。
+
+    _ASSET_KINDS = {
+        "立绘": "pet_body", "精灵立绘": "pet_body", "身体": "pet_body",
+        "头像": "pet_head", "精灵头像": "pet_head",
+        "刻印": "mintmark_icon", "刻印图标": "mintmark_icon",
+        "套装": "suit", "套装图标": "suit",
+        "部件": "equip", "部件图": "equip",
+        "称号": "title", "称号图标": "title",
+        "异常": "battle_effect", "异常图标": "battle_effect", "异常状态": "battle_effect",
+        "魂印图标": "soulmark", "专属效果图标": "soulmark",
+        "buff": "signbuff", "buff图标": "signbuff",
+        "道具图标": "item", "道具": "item",
+    }
+
+    _LOCAL_ICON_DIRS = {
+        "mintmark_icon": "mintmark", "suit": "suit", "equip": "equip",
+        "title": "title", "battle_effect": "effect", "soulmark": "soulmark",
+    }
+
+    def _local_asset(self, key: str, rid: int) -> bytes | None:
+        """先查本地 icon_assets 目录（2026-11-16 预存了 9171 个图标 / 140.8 MB）。
+
+        有就直接读，没有才联网 —— 图标类素材基本固定，本地能覆盖 99%。
+        """
+        sub = self._LOCAL_ICON_DIRS.get(key)
+        if not sub:
+            return None
+        try:
+            base = os.path.join(self.cfg.data_dir, "icon_assets", sub, f"{rid}.png")
+            if os.path.isfile(base) and os.path.getsize(base) > 200:
+                with open(base, "rb") as f:
+                    return f.read()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[seer_asset] 读本地图标失败: %s", exc)
+        return None
+
+    def _asset_getter(self, key: str):
+        from .service import (
+            PetBodyImageGetter, PetHeadImageGetter, MintmarkIconGetter,
+            SuitImageGetter, EquipImageGetter, TitleImageGetter,
+            BattleEffectImageGetter, SoulmarkIconGetter, SignBuffImageGetter,
+            ElementTypeImageGetter, ItemImageGetter,
+        )
+        return {
+            "pet_body": PetBodyImageGetter, "pet_head": PetHeadImageGetter,
+            "mintmark_icon": MintmarkIconGetter, "suit": SuitImageGetter,
+            "equip": EquipImageGetter, "title": TitleImageGetter,
+            "battle_effect": BattleEffectImageGetter, "soulmark": SoulmarkIconGetter,
+            "signbuff": SignBuffImageGetter, "element": ElementTypeImageGetter,
+            "item": ItemImageGetter,
+        }.get(key)
+
+    def _asset_id(self, key: str, target: str) -> tuple[int | None, str]:
+        """名字 → id。返回 (id, 错误说明)。"""
+        from .data import db_manager
+
+        # 精灵类：走 _resolve_pets（它已经处理名字回退、多形态）
+        if key in ("pet_body", "pet_head"):
+            handler = self._pet_config_handler
+            pets, matched = handler._resolve_pets(target)
+            if not pets:
+                return None, f"没认出精灵「{target}」"
+            if len(pets) > 1:
+                names = "、".join(f"{p.name}({p.id})" for p in pets[:5])
+                return None, f"「{target}」匹配到多只：{names}。请说得更具体。"
+            return int(pets[0].id), ""
+
+        # 其余走 seerapi 的表
+        sess = db_manager.get_all_sessions().get("seerapi")
+        if sess is None:
+            return None, "seerapi 数据库还没加载完"
+
+        # (表名, 名称字段, 主键字段)
+        table_map = {
+            "suit":          ("suit",          "name",    "id"),
+            "equip":         ("equip",         "name",    "id"),
+            "title":         ("title_part",    "name",    "id"),
+            "battle_effect": ("battle_effect", "name",    "id"),
+        }
+        # 魂印图标：soulmark_icon 用 icon_id 当主键，没有 name 字段，
+        # 只支持直接给 id，或者先从 pet_special_effect 反查
+        try:
+            from sqlalchemy import text as _text
+        except Exception:
+            return None, "sqlalchemy 不可用"
+
+        if key in table_map:
+            tbl, name_col, id_col = table_map[key]
+            try:
+                rows = sess.execute(
+                    _text(f"select {id_col}, {name_col} from {tbl} "
+                          f"where {name_col} like :n limit 5"),
+                    {"n": f"%{target}%"},
+                ).fetchall()
+            except Exception as exc:  # noqa: BLE001
+                return None, f"查 {tbl} 出错：{type(exc).__name__}: {exc}"
+            if not rows:
+                return None, f"库里没有叫「{target}」的{tbl}"
+            if len(rows) > 1:
+                names = "、".join(f"{r[1]}({r[0]})" for r in rows)
+                return None, f"「{target}」匹配到多条：{names}。请说得更具体。"
+            return int(rows[0][0]), ""
+
+        # 魂印图标：先按精灵名反查它有没有魂印图标
+        if key == "soulmark":
+            try:
+                pets, _ = self._pet_config_handler._resolve_pets(target)
+                if not pets:
+                    return None, f"没认出精灵「{target}」"
+                pid = int(pets[0].id)
+                # soulmark_icon 的结构：soulmark_id / pet_id / effect_id / icon_id / icon_asset_url
+                rows = sess.execute(
+                    _text("select icon_id from soulmark_icon "
+                          "where pet_id = :p and icon_id is not null limit 1"),
+                    {"p": pid},
+                ).fetchall()
+                if not rows or rows[0][0] is None:
+                    return None, (f"「{pets[0].name}」没有收录魂印图标"
+                                  f"（soulmark_icon 里 pet_id={pid} 没有对应条目）")
+                return int(rows[0][0]), ""
+            except Exception as exc:  # noqa: BLE001
+                return None, f"查魂印图标出错：{type(exc).__name__}: {exc}"
+
+        # buff 图标：buff 表有 icon 和 id
+        if key == "signbuff":
+            try:
+                rows = sess.execute(
+                    _text("select icon from buff where tag like :n limit 1"),
+                    {"n": f"%{target}%"},
+                ).fetchall()
+                if not rows or rows[0][0] is None:
+                    return None, f"没有「{target}」对应的 buff 图标"
+                return int(rows[0][0]), ""
+            except Exception as exc:  # noqa: BLE001
+                return None, f"查 buff 出错：{type(exc).__name__}: {exc}"
+
+        return None, f"不支持的素材类型：{key}"
+
+
+    @llm_tool(name="seer_asset")
+    async def seer_asset(self, event: AstrMessageEvent, kind: str, target: str) -> str:
+        """按类型发一张素材图（立绘 / 头像 / 刻印图标 / 套装图标 / 部件图 / 称号图标 /
+        异常状态图标 / 魂印图标 / buff 图标 / 属性图标 / 道具图标）。
+
+        # 什么时候用
+        群友说「发个 XX 的立绘」「XX 刻印长什么样」「套装图标」「异常状态图标」
+        「魂印图标有吗」「XX 的部件图」「道具图标」时用它。
+        **这就是「要图」的工具**——不要用 seer_pet（那只返回文字）。
+
+        # 参数
+        kind   素材类型，必须是下面之一：
+               立绘 / 头像 / 刻印图标 / 套装图标 / 部件图 / 称号图标 /
+               异常状态图标 / 魂印图标 / buff图标 / 属性图标 / 道具图标
+        target 要查的名字（精灵名、套装名、异常状态名、刻印名…）
+
+        # 注意
+        图标类素材很多是几十像素的小图，这是游戏原素材的尺寸，不是画质问题。
+        查不到会说明是名字不对还是这类素材没收录。
+        """
+        key = self._ASSET_KINDS.get((kind or "").strip())
+        if not key:
+            kinds = "、".join(sorted(set(self._ASSET_KINDS)))
+            return f"没认出素材类型「{kind}」。可用的有：{kinds}"
+
+        rid, err = self._asset_id(key, (target or "").strip())
+        if rid is None:
+            return err
+
+        getter = self._asset_getter(key)
+        if getter is None:
+            return f"类型「{kind}」没有对应的取图器"
+
+        # 先查本地（图标类预存过），没有再联网
+        data = self._local_asset(key, rid)
+        src = "本地"
+        if data is None:
+            try:
+                data = await getter(str(rid))
+                src = "在线"
+            except Exception as exc:  # noqa: BLE001
+                return f"下载素材图失败：{type(exc).__name__}: {exc}"
+        if not data:
+            return f"「{target}」的{kind}没有取到（可能这款素材官方没放）"
+
+        import base64
+        import astrbot.api.message_components as Comp
+        try:
+            from astrbot.core.message.message_result import MessageChain
+        except Exception:
+            from astrbot.core.message.message_event_result import MessageChain
+        try:
+            b64 = base64.b64encode(data).decode()
+            chain = MessageChain(chain=[
+                Comp.Image.fromBase64(b64),
+                Comp.Plain(f"{target} · {kind}"),
+            ])
+            await self.context.send_message(event.unified_msg_origin, chain)
+            return f"「{target}」的{kind}已发出（{len(data) // 1024 or 1} KB，来自{src}）。"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[seer_asset] 发送失败: %s", exc)
+            return f"取到图了（{len(data)} 字节）但没发出去：{type(exc).__name__}"
+
+    # ═══ 上传投稿（2026-11-16 加）═══════════════════════════════════════
+    # 原命令「收录配置图」是裸名识别 + 白名单权限，逻辑都在 handler.save 里。
+    # 这里不重写逻辑，只把群友的自然语言整理成标准 arg，再喂给 handler.save。
+
+    @llm_tool(name="seer_config_submit")
+    async def seer_config_submit(
+        self, event: AstrMessageEvent, pet: str, author: str = "", note: str = ""
+    ) -> str:
+        """收录群友投稿的配置图（把群友发的截图存进图库，供以后查询）。
+
+        # 什么时候用
+        群友**本条消息带了配置截图**，并且说「收录一下」「帮我存」「投稿」
+        「传个配置」「记一下这个配置」时才调用。
+
+        # 三个硬性前提，缺一条就不要调
+        1. **本条消息必须带图**。没图就告诉群友「先把截图和这句话放同一条消息发出来」，
+           不要调用本工具。
+        2. 群友必须说清是**哪只精灵**（名字或 ID）。
+        3. 群友要有收录权限（白名单）。没有权限会被挡下，如实转告即可。
+
+        # 参数（从群友的话里提取，别自己编）
+        pet    精灵名或 ID
+        author 作者名。群友没说就留空，会用手打作者（群昵称）
+        note   备注。群友说了配装细节就填，比如「5级秘咒，7级特攻加一天蛇」；
+               没说就留空，**不要自己编备注**
+
+        # 同名处理
+        一只精灵可以有多套配置，按作者区分：新作者新增一套，同作者再传会替换他自己那套。
+        这条规则由 handler 处理，你不用管。
+
+        # 和 seer_player_config 的区别
+        seer_player_config 是**查**投稿；本工具是**存**投稿。
+        """
+        handler = self._pet_config_handler
+
+        # ① 先查有没有图（缺图直接拒，不写入任何东西）
+        try:
+            if handler._pick_image(event) is None:
+                return ("这条消息里没有图片。配置图必须和文字放在同一条消息里发出来，"
+                        "分两条发收不到。让群友把截图和「收录 XXX」一起发一次。")
+        except Exception:
+            pass
+
+        # ② 权限（复用原命令的检查，不放松）
+        try:
+            if not handler.can_upload(event):
+                return ("这位群友没有收录配置图的权限。"
+                        "需要 AstrBot 管理员把 TA 的 ID 加进插件配置「收录配置图白名单」。")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[seer_config_submit] 权限检查异常: %s", exc)
+
+        pet_name = (pet or "").strip()
+        if not pet_name:
+            return "没说清是哪只精灵。让群友补一句「收录 <精灵名>」再发图。"
+
+        # ③ 拼成原命令认识的格式，交给 handler.save
+        arg = pet_name
+        if (author or "").strip():
+            arg += f" [作者:{(author or '').strip()}]"
+        if (note or "").strip():
+            arg += f" [备注:{(note or '').strip()}]"
+
+        texts: list[str] = []
+        try:
+            async for result in handler.save(event, arg):
+                # 尽量把事件结果里的文本抽出来
+                txt = ""
+                for attr in ("message", "text", "msg"):
+                    v = getattr(result, attr, None)
+                    if isinstance(v, str) and v:
+                        txt = v
+                        break
+                if not txt:
+                    try:
+                        chain = getattr(result, "chain", None) or []
+                        txt = " ".join(
+                            str(getattr(c, "text", "") or "") for c in chain
+                        ).strip()
+                    except Exception:
+                        txt = ""
+                if txt:
+                    texts.append(txt)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[seer_config_submit] 保存失败: %s", exc)
+            return f"收录过程出错：{type(exc).__name__}: {exc}"
+
+        if not texts:
+            return "收录指令已执行，但没有返回文字结果，去「产出 → 配置图」里确认一下有没有存进去。"
+        return "\n".join(texts)
+
 
     @filter.command("配置图", alias={"配置"}, desc="查询精灵配置图", ignore_prefix=True)
     async def pet_config(self, event: AstrMessageEvent, arg: str = ""):
