@@ -1172,10 +1172,14 @@ class SeerExpertPlugin(Star):
                     "如果这轮只是普通聊天、跟改动无关，读过就行。"
             "**验完之后用 seer_dev_reply 写回结论 —— 它会自动私聊维护方，不用你在群里说。**"
             "**回复群友时绝对不要提留言板、清单、测试这些词** —— 群友看不到那个文件，提了只会莫名其妙。"
-                    "※ 验完之后用 seer_dev_reply 把结论写回去，维护那边靠这个推进。"
                 )))
                 # ★ 2026-11-17：挂个 pending，下一轮提醒它写回（见 dev_note_followup）
+                #   同时记时间戳 —— pending 必须有保质期。
+                #   实测 bug：群里说「111」→ bot 读了留言板 → pending=True，
+                #   但「111」不需要验东西，它不会写回 → pending 永久为 True
+                #   → 之后群里任何人要图，全部掉到私聊，群友以为 bot 坏了。
                 self._dev_note_pending = True
+                self._dev_note_pending_at = __import__("time").time()
                 self._dev_note_hinted = False
                 logger.debug(f"[赛尔] 留言板更新提示已注入（mtime={when}）")
         except Exception as exc:  # noqa: BLE001
@@ -2710,8 +2714,24 @@ class SeerExpertPlugin(Star):
             except Exception:  # noqa: BLE001
                 return False
 
+        # ★ 2026-11-17：pending 必须有保质期（10 分钟）。
+        #   实测 bug：群里说「111」→ bot 读了留言板 → pending=True，
+        #   但「111」不需要验东西，它不会写回 → pending 永久 True
+        #   → 之后群里任何人要图，全部掉私聊，群友以为 bot 坏了。
+        _PENDING_TTL = 600.0
+        _pending = bool(getattr(self, "_dev_note_pending", False))
+        if _pending:
+            _at = float(getattr(self, "_dev_note_pending_at", 0.0) or 0.0)
+            _age = __import__("time").time() - _at
+            if _at <= 0 or _age > _PENDING_TTL:
+                self._dev_note_pending = False
+                _pending = False
+                logger.info(
+                    f"[赛尔] 留言板 pending 已过期（{_age:.0f}s），发图恢复走当前会话"
+                )
+
         targets = []
-        if getattr(self, "_dev_note_pending", False):
+        if _pending:
             # 测试中 → 只发私聊，群里一个字都不发
             for qq in self._dev_note_admins():
                 targets.append(f"onebot:FriendMessage:{qq}")
