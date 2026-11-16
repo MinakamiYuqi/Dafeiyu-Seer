@@ -2496,14 +2496,70 @@ class SeerExpertPlugin(Star):
 
         if pattern:
             kw = str(pattern).strip()
-            hits = [(i + 1, ln) for i, ln in enumerate(lines) if kw in ln]
+            hits = [(i, ln) for i, ln in enumerate(lines) if kw in ln]
             if not hits:
-                return f"{rel_show} 里没有含「{kw}」的行（共 {total} 行）"
+                # 给个能自救的提示：可能拼错了，或者该用更短的关键词
+                return (f"「{kw}」在 {rel_show}（共 {total} 行）里一处都没命中。\n"
+                        f"  试试更短的关键词，或者用 seer_read_code 的 start/limit 直接读某段。")
+
+            import re as _re
+
+            def _block(start_i: int) -> tuple[int, int]:
+                """从一行 def/class 出发，往上含装饰器、往下找到块结束。返回 [起, 止) 下标。"""
+                li = lines[start_i]
+                indent = len(li) - len(li.lstrip())
+                top = start_i
+                while top > 0 and lines[top - 1].lstrip().startswith("@"):
+                    top -= 1
+                end = len(lines)
+                for k in range(start_i + 1, len(lines)):
+                    if not lines[k].strip():
+                        continue
+                    ind = len(lines[k]) - len(lines[k].lstrip())
+                    if ind <= indent and not lines[k].lstrip().startswith(("#", ")", "]", "}")):
+                        end = k
+                        break
+                # 砍掉尾部的空行
+                while end > start_i + 1 and not lines[end - 1].strip():
+                    end -= 1
+                return top, end
+
+            # ① 命中定义行 → 回整个函数/类（最省，bot 真正要的）
+            def_re = _re.compile(r"^\s*(async\s+)?(def|class)\s")
+            for i, ln in hits:
+                if def_re.match(ln):
+                    a, b = _block(i)
+                    ln_cnt = b - a
+                    body = "\n".join(f"  {a + k + 1:>5}: {lines[a + k].rstrip()[:160]}"
+                                      for k in range(ln_cnt))
+                    more = ""
+                    if len(hits) > 1:
+                        others = "、".join(f"L{j + 1}" for j, _ in hits if j != i)[:100]
+                        more = f"\n  （另外还命中 {len(hits) - 1} 处：{others}）"
+                    return (f"{rel_show}　「{kw}」命中的定义（L{a + 1}~L{b}，共 {ln_cnt} 行）："
+                            f"\n{body}{more}")
+
+            # ② 命中普通内容 → 回匹配行 + 前后各 2 行上下文
             show = hits[:n]
-            body = "\n".join(f"  {no:>5}: {ln.rstrip()[:160]}" for no, ln in show)
-            tail = (f"\n  …… 还有 {len(hits) - len(show)} 条没显示"
+            out_lines: list[str] = []
+            last = -9                      # 上次已经印到第几行（-9 表示还没印过）
+            marks = {i for i, _ in show}    # 哪些行是真正命中的
+            for i, _ in show:
+                lo, hi = max(0, i - 2), min(len(lines), i + 3)
+                if lo > last + 1:
+                    if out_lines:
+                        out_lines.append("  " + "·" * 20)     # 中间隔断了，加分隔线
+                    start = lo
+                else:
+                    start = last + 1                          # ★ 接着上次印，不重复
+                for k in range(start, hi):
+                    mark = "→" if k in marks else " "
+                    out_lines.append(f"  {mark}{k + 1:>5}: {lines[k].rstrip()[:160]}")
+                last = hi - 1
+            tail = (f"\n  …… 还有 {len(hits) - len(show)} 处没显示"
                     if len(hits) > len(show) else "")
-            return f"{rel_show}　含「{kw}」的 {len(hits)} 行：\n{body}{tail}"
+            return (f"{rel_show}　含「{kw}」的 {len(hits)} 处"
+                    f"（每处带前后 2 行上下文）：\n" + "\n".join(out_lines) + tail)
 
         seg = lines[off: off + n]
         if not seg:
