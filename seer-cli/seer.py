@@ -229,9 +229,9 @@ def cmd_pet(k: Any, args) -> None:
         out(v["intro"][:600])
 
     if v["pet_rules"]:
-        section(f"玩家已确认规则（{len(v['pet_rules'])} 条）")
-        for topic, content in v["pet_rules"]:
-            out(f"- {topic}：{str(content)[:160]}")
+        # 2026-11-16 鱼片定的：查精灵就是查资料，facts 正文不自动铺出来
+        # （平均占输出 40%+，最多能到 55%）。只留一行提示，要细节自己查。
+        out(f"（另有 {len(v['pet_rules'])} 条玩家实测规则，需要时：seer.py facts {v['name']}）")
 
 
 
@@ -1205,8 +1205,15 @@ def lookup_suit(name: str) -> dict:
         return {}
     try:
         c2 = sqlite3.connect("file:" + api + "?mode=ro", uri=True)
+        # ★ 2026-11-16：和插件的 lookup_suit 对齐 —— 直接读 suit_bonus_attr 拿准确数值。
+        #   原来只取 desc 让 parse_suit_stats 去解析中文，而圣芒写的是
+        #   「己方精灵体力+100点，其他能力+80点」，文本解析抓不到 → 套装加成等于没算
+        #   （stat 得 924、配置图 1174，差的 500 就是圣芒）。
         row = c2.execute(
-            "select s.id, s.name, b.desc from suit s left join suit_bonus b on b.id=s.id "
+            "select s.id, s.name, b.desc, "
+            "a.atk, a.def, a.sp_atk, a.sp_def, a.spd, a.hp "
+            "from suit s left join suit_bonus b on b.id=s.id "
+            "left join suit_bonus_attr a on a.id = b.attribute_id "
             "where s.name = ? or s.name like ? limit 1", (name, "%" + name + "%")
         ).fetchone()
         c2.close()
@@ -1214,7 +1221,11 @@ def lookup_suit(name: str) -> dict:
         return {}
     if not row:
         return {}
-    return {"id": row[0], "name": row[1], "desc": row[2]}
+    vals = {"atk": int(row[3] or 0), "def": int(row[4] or 0),
+            "sp_atk": int(row[5] or 0), "sp_def": int(row[6] or 0),
+            "spd": int(row[7] or 0), "hp": int(row[8] or 0)}
+    return {"id": row[0], "name": row[1], "desc": row[2], "text": row[2],
+            "vals": vals, "total": sum(vals.values())}
 
 
 # 战队满级加成（鱼片口述 2026-11-01）
@@ -1488,12 +1499,20 @@ def cmd_stat(k: Any, args) -> None:
         for kk, v in info["vals"].items():
             extra[kk] += int(v or 0)
     suit_info = None
+    suit_vals: dict = {}
     if args.suit:
         suit_info = lookup_suit(args.suit)
         if not suit_info:
             out(f"套装未找到：{args.suit}")
         else:
-            suit_vals = parse_suit_stats(suit_info.get("desc") or "")
+            # ★ 2026-11-16 修两个叠在一起的 bug：
+            #   ① lookup_suit 返回的字段叫 text，这里却读 desc → 永远 None；
+            #   ② 2026-11-16 起 lookup_suit 已经直接读 suit_bonus_attr 表拿到准确
+            #      六项（圣芒 500 / 晨曦 120），不该再去解析中文文本。
+            #   结果就是「套装数值一直没算进面板」—— 圣芒版无为觉者 stat 得 924，
+            #   配置图 1174，差的 500 就是圣芒。
+            suit_vals = (suit_info.get("vals")
+                         or parse_suit_stats(suit_info.get("text") or suit_info.get("desc") or ""))
     for kk, vv in suit_vals.items():
         extra[kk] = extra.get(kk, 0) + vv
 
@@ -2207,10 +2226,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="目镜：漫游者-AH(最常用 攻30特攻30体40) / 漫游者-AS(攻30特攻30速15) / 漫游者-S(速20)")
     s.add_argument("--hpup", type=int, default=0,
                    help="体力上限加成（药剂，0~20，永久生效）")
-    s.add_argument("--team", default="",
+    s.add_argument("--team", default="满级",
                    help="战队加成（可自行选择点哪几项，点错能用药剂洗）："
                         "\"满级\"全部点 / \"maxdiff\"跳过另一攻（极差向用）/ \"攻15,体30\"只点指定项")
-    s.add_argument("--annual", action="store_true", help="年费加成：全能力 +10")
+    s.add_argument("--annual", action="store_true", default=True, help="年费加成：全能力 +10")
+    s.add_argument("--no-annual", dest="annual", action="store_false", help="关掉年费加成（stat_view 默认 year_bonus=True，这里默认也开）")
     s.add_argument("--soulmod", action="append", default=[],
                    help='魂印面板修正，如 "双防*0.15->非速度" / "双防+100" / "攻击+200" / '
                         '"双攻差*0.15*5->非双攻"（无极圣武） / '

@@ -13,6 +13,45 @@ import tempfile
 
 import aiohttp
 
+# 本地图标根目录（plugin_data/astrbot_plugin_seer_info/icon_assets）
+# ★ 2026-11-16 鱼片指出：插件不该塞固定实例路径，一律走环境/框架给的目录。
+def _icon_dirs() -> tuple[str, ...]:
+    """按优先级给出候选图标根目录，**不含任何硬编码实例路径**。
+
+    ① 环境变量 SEER_ICON_DIR —— 测试 / 手动指定
+    ② AstrBot 的 plugin_data（和 expert 自己拿 data_dir 用的是同一个 API）
+    ③ 插件目录上溯到 plugin_data（工作目录不同时的兜底）
+    """
+    out: list[str] = []
+    env = os.environ.get("SEER_ICON_DIR", "").strip()
+    if env:
+        out.append(env)
+    try:
+        from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+
+        out.append(os.path.join(get_astrbot_plugin_data_path(),
+                                "astrbot_plugin_seer_info", "icon_assets"))
+    except Exception:  # noqa: BLE001
+        pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    out.append(os.path.join(here, "..", "..", "plugin_data",
+                            "astrbot_plugin_seer_info", "icon_assets"))
+    return tuple(dict.fromkeys(out))  # 去重保序
+
+
+_ICON_DIRS: tuple[str, ...] = _icon_dirs()
+
+
+def set_icon_root(root: str) -> None:
+    """由插件在启动时注入真实的 icon_assets 目录（从 seerapi.sqlite 的位置反推）。
+
+    不注入也不会崩，只是本地缓存命中率低（会退到联网取图）。
+    """
+    global _ICON_DIRS
+    r = str(root or "").strip()
+    if r:
+        _ICON_DIRS = (r,) + tuple(d for d in _ICON_DIRS if d != r)
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _TPL_DIR = os.path.join(_HERE, "templates", "config_card")
 _TPL_FILE = "template.html.j2"
@@ -33,6 +72,10 @@ _SRC = {
         "https://newseer.61.com/web/countermark/icon/{}.png",
         "https://cnb.cool/SeerAPI/seer-unity-assets/-/git/raw/main/newseer/assets/art/ui/assets/countermark/icon/{}.png",
     ],
+    # 2026-11-16：宝石图标（countermark/gem/{gem.id}.png），本地已存 245 张
+    "gem": [
+        "https://raw.githubusercontent.com/SeerAPI/seer-unity-assets/main/newseer/assets/art/ui/assets/countermark/gem/{}.png",
+    ],
     "suit": [
         "https://cnb.cool/SeerAPI/seer-unity-assets/-/git/raw/main/newseer/assets/art/ui/assets/item/cloth/suiticon/{}.png",
         "https://raw.githubusercontent.com/SeerAPI/seer-unity-assets/refs/heads/main/newseer/assets/art/ui/assets/item/cloth/suiticon/{}.png",
@@ -46,6 +89,35 @@ _SRC = {
         "https://raw.githubusercontent.com/SeerAPI/seer-unity-assets/refs/heads/main/newseer/assets/art/ui/assets/achieve/title/{}.png",
     ],
 }
+
+
+# 一个 kind 可能落在多个子目录里，按顺序试，先命中的赢。
+#   element：高清组（element_hd，250~320px）在前，40×40 小图兜底。
+#   ★ 2026-11-16 补：原来只拼 <kind>/<id>.png，属性图标永远取到 element/ 的小图。
+_ICON_ALIASES: dict[str, tuple[str, ...]] = {
+    "element": ("element_hd", "element"),
+}
+
+
+def _local_icon(kind: str, iid) -> bytes:
+    """本地图标缓存 icon_assets/<子目录>/<id>.png；没有才走网络。
+
+    2026-11-16：宝石图标 245 张已全部下到 icon_assets/gem/（按 gem.id 命名），
+    断网也能出图，_SRC 里那条只是兜底。
+    """
+    if iid is None or iid == "":
+        return b""
+    subs = _ICON_ALIASES.get(kind, (kind,))
+    for root in _ICON_DIRS:
+        for sub in subs:
+            fp = os.path.join(root, sub, f"{iid}.png")
+            try:
+                if os.path.exists(fp) and os.path.getsize(fp) > 200:
+                    with open(fp, "rb") as f:
+                        return f.read()
+            except OSError:
+                continue
+    return b""
 
 
 def _data_uri(raw: bytes, mime: str = "image/png") -> str:
@@ -102,6 +174,11 @@ async def render_config_card(view: dict, *, viewport_width: int = 1040,
         for mm in view.get("mintmarks") or []:
             raw = await _fetch(s, "mint", mm.get("id"))
             mm["icon"] = _data_uri(raw) if raw else ""
+            # 刻印上绑的宝石：本地优先（icon_assets/gem 共 245 张），CDN 兜底
+            g = mm.get("gem")
+            if g and g.get("id"):
+                graw = _local_icon("gem", g["id"]) or await _fetch(s, "gem", g["id"])
+                g["icon"] = _data_uri(graw) if graw else ""
 
         eq = view.get("equipment") or {}
         for blk, kind in ((eq.get("suit"), "suit"), (eq.get("eye"), "eye"),

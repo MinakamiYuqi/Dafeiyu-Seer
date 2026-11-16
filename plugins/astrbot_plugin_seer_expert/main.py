@@ -60,6 +60,38 @@ class SeerExpertPlugin(Star):
         self._config_cache: dict[str, dict] = {}
         self.kb = SeerKnowledge(str(seer_path), os.path.join(self.data_dir, "kb.sqlite"))
         self._data_root = get_astrbot_plugin_data_path()
+
+        # ★ 2026-11-16：把「真实存在」的 icon_assets 告诉 render_card。
+        #   不能用 get_astrbot_plugin_data_path() 拼 —— 实测在 cwd=实例根 时
+        #   它返回 实例/data/plugin_data（真实是 实例/core/data/plugin_data）。
+        #   seer_path 是能读到 seerapi.sqlite 的绝对路径，同目录就是 icon_assets。
+        try:
+            from .render_card import set_icon_root
+
+            _icon_root = os.path.join(os.path.dirname(os.path.abspath(seer_path)), "icon_assets")
+            if os.path.isdir(_icon_root):
+                set_icon_root(_icon_root)
+                logger.info(f"[赛尔配置图] 图标目录：{_icon_root}")
+            else:
+                logger.warning(f"[赛尔配置图] 图标目录不存在，本地缓存不生效：{_icon_root}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[赛尔配置图] 注入图标目录失败：{exc}")
+
+        # ★ 2026-11-16：启动时打一行代码版本，省得以后反复怀疑「到底重启没有」。
+        #   改完代码 → 同步实例 → 重启，这一行的 mtime 必须变；
+        #   不变就是没重启（或者同步到了别的目录）。
+        try:
+            import time as _t
+
+            _here = os.path.dirname(os.path.abspath(__file__))
+            _stamps = []
+            for _f in ("db.py", "main.py", "render_card.py"):
+                _p = os.path.join(_here, _f)
+                if os.path.isfile(_p):
+                    _stamps.append(f"{_f} {_t.strftime('%m-%d %H:%M', _t.localtime(os.path.getmtime(_p)))}")
+            logger.info("[赛尔] 代码版本 → %s", " ｜ ".join(_stamps))
+        except Exception:  # noqa: BLE001
+            pass
         if not self.kb.available():
             logger.warning(
                 f"[赛尔知识库] 没找到 SeerAPI 本地库，尝试过：{candidates}"
@@ -1322,11 +1354,12 @@ class SeerExpertPlugin(Star):
 
         raw = sep.join(lines)
         result = await self._learn_and_render(f"pet:{pid}", "pet", raw, event)
+        # 2026-11-16 鱼片定的：seer_pet 是「查资料」，facts 正文不自动铺出来
+        #   （实测占输出 23%~55%，平均 40%；而且每轮对话 facts_for_chat 已经
+        #     按话题注入过一次，这里再全文带一遍就是重复烧 token）。
+        #   只留一行提示，群友真问机制时模型自己调 seer_recall / seer_term。
         if v["pet_rules"]:
-            rules = "；".join(
-                f"{str(t).split('·')[-1]}={str(c)[:120]}" for t, c in v["pet_rules"]
-            )
-            result += sep + "【玩家已确认的规则】" + rules
+            result += sep + f"（另有 {len(v['pet_rules'])} 条玩家实测规则，问机制时用 seer_recall 按关键词查）"
         effects = self.kb.pet_effects(pid)
         if effects and "专属效果" not in result:
             result += sep + "专属效果：" + "；".join(
@@ -2204,6 +2237,57 @@ class SeerExpertPlugin(Star):
         lines.append("（此条来自 SeerAPI，缺额外/隐藏数值；如需完整数值可再问一次换个写法）")
         return "\n".join(lines)
 
+
+    @llm_tool(name="seer_equip")
+    async def seer_equip(self, event: AstrMessageEvent, target: str) -> str:
+        """查【套装 / 称号 / 目镜】的具体加成数值 —— 三类一起试，命中哪个报哪个。
+
+        # 什么时候用
+        群友问「圣芒加多少」「晨曦之星战甲什么效果」「星光之旅加什么」「AH 目镜几攻」
+        时用它。**算配装前想知道某件装备值不值得带**也用它。
+        只问名字/效果文案用 seer_suit；**问六项具体加多少用这个**。
+
+        # 注意
+        三类的加成来源不同但都会给六项：套装读 suit_bonus_attr、
+        称号读 title_attr_bonus、目镜读 equip_bonus_attr。
+        套装另外带一段战斗效果原文（「背包内所有精灵速度、体力+60…」），也一并给出。
+
+        Args:
+            target(string): 套装名 / 称号名 / 目镜名，**简称就行**
+                （「圣芒」「晨曦」「裁决」「神话」「星光之旅」「漫游者-AH」「AH」）
+        """  # noqa: D301
+        t = str(target or "").strip()
+        if not t:
+            return "给个名字：套装 / 称号 / 目镜都行（「圣芒」「神话」「漫游者-AH」）"
+        _cn = getattr(self.kb, "_STAT_CN", {}) or {}
+        tried = []
+        for kind, fn in (("套装", self.kb.lookup_suit),
+                         ("称号", self.kb.lookup_title),
+                         ("目镜", self.kb.lookup_eyepiece)):
+            try:
+                info = fn(t) or {}
+            except Exception as exc:  # noqa: BLE001
+                tried.append(f"{kind}查询出错：{type(exc).__name__}")
+                continue
+            if not info:
+                continue
+            vals = {k: int(v or 0) for k, v in (info.get("vals") or {}).items()}
+            total = int(info.get("total") or sum(vals.values()))
+            lines = [f"【{kind}】{info.get('name')}　六项和 {total}"]
+            parts = [f"{_cn.get(k, k)}+{v}" for k, v in vals.items() if v]
+            if parts:
+                lines.append("  " + "  ".join(parts))
+            else:
+                lines.append("  （没有逐项面板加成）")
+            text = str(info.get("text") or info.get("desc") or "").strip()
+            if text:
+                lines.append("  原文：" + (text[:260] + ("…" if len(text) > 260 else "")))
+            return chr(10).join(lines)
+        hint = "；".join(tried) if tried else ""
+        return (f"套装 / 称号 / 目镜里都没找到「{t}」。"
+                + (f"（{hint}）" if hint else "")
+                + "　试试简称：圣芒 / 晨曦 / 裁决 / 神话 / 星光之旅 / 漫游者-AH")
+
     @llm_tool(name="seer_gem")
     async def seer_gem(self, event: AstrMessageEvent, keyword: str = "") -> str:
         """查宝石的逐级数值（36 类 / 245 条，本地库直读，不用联网）。
@@ -2521,9 +2605,11 @@ class SeerExpertPlugin(Star):
             vs(string): 对线特化。留空=通用；phys=极限抗物理；spec=极限抗特殊
             talent(int): 天赋，满个体 31
             nature(string): 性格。留空按预设自动选（物攻向爆攻=固执、爆盾=顽皮等）
-            suit(string): 套装名，如「晨曦」
+            suit(string): 套装名。**简称就行**（「晨曦」「圣芒」「裁决」都认，
+                不用写全名）
             title(string): 称号名，如「神话」
             eye(string): 目镜名，如「漫游者-AH」
+                群里会以为两边数值对不上（2026-11-16 实测差 10 就是这个）。
         """
         _miss = self._db_missing()
         if _miss:
@@ -2546,7 +2632,7 @@ class SeerExpertPlugin(Star):
             f"种族 攻{v['atk_base']} / 特攻{v['spa_base']} → 自动判为 {v['dir_cn']}"
         )
         lines.append("刻印：" + " + ".join(v["mints"]))
-        lines.append(f"性格：{v['nature'] or '中性'}" + (f" ｜ 套装：{suit}" if suit else ""))
+        lines.append(f"性格：{v['nature'] or '—'}" + (f" ｜ 套装：{suit}" if suit else ""))
         if v.get("ev_note"):
             lines.append(v["ev_note"])
 
@@ -2853,7 +2939,7 @@ class SeerExpertPlugin(Star):
         Args:
             name(string): 精灵名
             preset(string): 配装预设，可留空。填写则用 seer_build 那套（爆攻/爆体/爆盾/高速）
-            nature(string): 性格。留空按预设自动选，或按「中性」
+            nature(string): 性格。留空按流派自动选（物攻向=固执、特攻向=保守、双攻向=坦率），\n                传「固执」「开朗」这类游戏里真实存在的名字。
             ev(string): 学习力。两种写法都支持：
                 · 直接给学习力："atk=254,hp=252,spd=4"
                 · 给目标面板值（群友常这么说）："atk=max, sp_def=430, hp=1040, rest=spd"
@@ -2886,9 +2972,11 @@ class SeerExpertPlugin(Star):
                 系统会依据「已给刻印的方向 + 学习力分配」自动补全，
                 并在结果里标注「※ 推理补全：赤洲龙子→狴犴（按物防向推的，你没说具体哪条）」。
                 这样群友一眼能看出哪条是推的，要改也有依据。
-            gems(string): 刻印绑定的宝石，逗号分隔，与 mints 一一对应。
-                写法 "威力宝石Lv7@星纪"（@ 后面是绑定的技能名），不需要就留空位
-            suit(string): 套装名，如「晨曦之星战甲」
+            gems(string): 刻印绑定的宝石，逗号分隔，与 mints 一一对应（**位置决定绑哪个刻印**）。
+                写法 "威力宝石Lv7@辟邪斩" —— @ 后面是**这只精灵的技能名**，不是刻印名。
+                图上刻印下面那行「绑定技能 → xxx」就是它。不需要宝石就给空位
+            suit(string): 套装名。**简称就行**（「晨曦」「圣芒」「裁决」都认，
+                不用写全名「晨曦之星战甲」「圣芒佑界套装」——库里是模糊匹配）
             title(string): 称号名，如「神话」「星光之旅」
             eye(string): 目镜名，如「漫游者-AH」
             team_skip(string): 战队不点的项，如「特攻」（极差向配置）
@@ -3081,7 +3169,7 @@ class SeerExpertPlugin(Star):
 
 
         # ★ 缺省自动补全（2026-11-03：之前 LLM 不传 nature/ev/mints 时，
-        #   图上就是「中性 + 学习力空 + 没刻印」，它只能一口气试好几版才凑对。
+        #   图上就是「性格没选 + 学习力空 + 没刻印」，它只能一口气试好几版才凑对。\n        #   （2026-11-16 起：性格空着会自动填一个真实且符合流派的，不再显示虚构名字）
         #   现在缺什么就按流派自动补，一次出对。）
         _preset = str(preset or "").strip() or "爆攻"     # 留空默认爆攻（最常见）
         _own = self.kb.pet_build(name) or {}               # 专属配装（用于对比/说明）
@@ -3272,7 +3360,7 @@ class SeerExpertPlugin(Star):
         _head = f"（已生成 {view['pet']['name']} 的配置图" if _sent else "配置图渲染好了但发送失败"
         return (f"{_head}{_note}。{_infer_line}\n"
                 f"刻印：{_mint_line}{_diff}\n"
-                f"性格：{nature or '中性'} ｜ 学习力：{ev or '0'}\n"
+                f"性格：{view['base'].get('nature') or '—'} ｜ 学习力：{ev or '0'}\n"
                 f"六项：{_six}）")
 
     @llm_tool(name="seer_config_tweak")
@@ -3544,19 +3632,20 @@ class SeerExpertPlugin(Star):
         mints: str = "",
         suit: str = "",
         title: str = "",
-        eye: str = "",
-    ) -> str:
+        eye: str = "", hpup: int = 20) -> str:
         """算精灵的满级面板：种族值 → 六项能力值（可叠刻印/套装/称号/目镜）。
 
         Args:
             name(string): 精灵名
             talent(int): 天赋/个体值，满个体 31
-            nature(string): 性格，如「固执」「开朗」；空=中性
+            nature(string): 性格，如「固执」「开朗」；空=按流派自动选（物攻固执 / 特攻保守 / 双攻坦率）
             ev(string): 学习力。整数=六项同刷；分项写 "atk=254,hp=148,spd=76"
             mints(string): 刻印，逗号分隔最多 3 个。支持简称如「九天攻」「圣战体」「v8」
-            suit(string): 套装名，如「晨曦」
+            suit(string): 套装名。**简称就行**（「晨曦」「圣芒」「裁决」都认，
+                不用写全名）
             title(string): 称号名，如「神话」
             eye(string): 目镜名，如「漫游者-AH」
+            hpup(number): 体力上限药剂加成（0~20），留空按 20。配置图默认就带 20，不传会少 20 —— 均分型精灵每项会少 10
         """
         _miss = self._db_missing()
         if _miss:
@@ -3565,6 +3654,7 @@ class SeerExpertPlugin(Star):
         v = self.kb.stat_view(
             name, talent=talent, nature=nature, ev=ev,
             mints=mint_list, suit=suit, title=title, eye=eye,
+            hpup=int(hpup or 0),
         )
         if not v["found"]:
             return v.get("empty_hint") or f"找不到精灵：{name}"
@@ -3908,8 +3998,8 @@ class SeerExpertPlugin(Star):
         other: float = 1.0,
         random: str = "range",
         power_boost: float = 0.0,
-    power_flat: float = 0.0,
-    variable_power: bool = False,
+        power_flat: float = 0.0,
+        variable_power: bool = False,
         general_add: float = 0.0,
         extra_add: str = "",
         general_reduce: float = 0.0,
@@ -3935,17 +4025,18 @@ class SeerExpertPlugin(Star):
             attack_type(string): 技能属性，支持双属性如「战斗/龙」
             defend_type(string): 防守方属性，支持双属性如「草/冰」
             type_mult(float): 克制倍率。留空（0）且给了 attack_type+defend_type 时自动算
+            type_mult_cap(float): 克制倍率上限。留空（0）=不封顶；填 2.0 表示最多算到 2 倍
             stab(float): 本系 1.5，否则 1.0
             crit(float): 暴击 2.0，不暴击 1.0
             other(float): 其他乘算修正（优先用下面具体参数）
             random(string): 浮动。'range'=区间 / 'min' / 'max' / 'avg' 或 217~255 的整数档。
                 ★浮动是 (217~255)/255 的 39 个离散档，每档 1/39，不是 [0.85,1.0] 连续区间
             power_boost(float): 威力加成比例（冰霜这类「X属性技能威力+N%」）。改的是威力，不是总伤
-    power_flat(float): 威力固定加成点数（威力宝石走这里：Lv1~10 = 1/4/7/10/14/17/20/24/27/30）。
-        加在百分比之后，因为原文写明「不受其他威力提升/下降效果加成」
-    variable_power(bool): 这一发是不是「变威力技能」。为真时 power_boost 和 power_flat 一律不生效
-        —— 依据变威力的覆盖清单，威力宝石和特性单属性增伤都在被覆盖之列。
-        库里的效果文本没有「变威力」字样（0 条命中），只能由调用方判断后传
+            power_flat(float): 威力固定加成点数（威力宝石走这里：Lv1~10 = 1/4/7/10/14/17/20/24/27/30）。
+                加在百分比之后，因为原文写明「不受其他威力提升/下降效果加成」
+            variable_power(bool): 这一发是不是「变威力技能」。为真时 power_boost 和 power_flat 一律不生效
+                —— 依据变威力的覆盖清单，威力宝石和特性单属性增伤都在被覆盖之列。
+                库里的效果文本没有「变威力」字样（0 条命中），只能由调用方判断后传
             general_add(float): 通用增伤，同类【相加】。强能/绝命/爆伤（+25%）走这里
             extra_add(string): 额外增伤，逗号分隔，多个【连乘】。如 "0.2,1.0"
                 强袭/精神（二者互斥，合并算一个乘区）、傲视100%、技能「下N回合额外+100%」走这里
@@ -5181,6 +5272,10 @@ class SeerExpertPlugin(Star):
         # 数据来源
         手册 pvp.db（和游戏内页面同源，图上有数据版本时间戳）。
         **不要自己补日期** —— 图上写的就是真的。
+
+        Args:
+            mode(string): 池子类型。「竞技」「限制」「巅峰池」=竞技限制池（默认）；
+                「专家」=专家禁用池；「大师」「竞技点」=大师竞技点。留空按「竞技」处理。
         """
         data, err = await self._render_pool(mode or "arena")
         if data is None:
@@ -5285,6 +5380,11 @@ class SeerExpertPlugin(Star):
         # 数据
         游戏协议 cmd 4481 的日榜，实时拉取（不是本地缓存）。
         图上有期次日期和票数条形。
+
+        Args:
+            pool(string): 「限2」或「限3」。留空默认限2。
+                限2 和限3 是交替投票的，一期只投一个池；
+                问的池子当期没投时会自动找最近一期投过它的。
         """
         blob, data, err = await self._render_vote(pool)
         if blob is None:
