@@ -3536,6 +3536,8 @@ class SeerExpertPlugin(Star):
         applied: list[str] = []
         failed: list[str] = []
         targets: dict[str, int] = {}
+        # ★ 2026-11-16：这轮被 ev: 显式改过的项 —— 挤占预算时它们不动
+        ev_touched: set[str] = set()
 
         for raw in str(changes or "").replace("，", ",").replace(";", ",").split(","):
             piece = raw.strip()
@@ -3550,9 +3552,11 @@ class SeerExpertPlugin(Star):
                 kk = alias.get(key[3:].strip(), key[3:].strip())
                 if val.lower() in ("max", "满", "拉满"):
                     ev_map[kk] = 252
+                    ev_touched.add(kk)          # ★ 记下「这轮显式指定」
                     applied.append(f"{kk} 学习力拉满 252")
                 elif val.isdigit():
                     ev_map[kk] = int(val)
+                    ev_touched.add(kk)
                     applied.append(f"{kk} 学习力 → {val}")
                 else:
                     failed.append(piece)
@@ -3630,6 +3634,39 @@ class SeerExpertPlugin(Star):
         #    ★关键：学习力总预算 510。给某一项加点时，必须从其他项里挪，
         #      否则总和超限算出来的数是假的（实测 spd=252 但总和 606 会虚高）。
         EV_CAP = 510
+        # ★ 2026-11-16 修「只加不减」：EV 总和超 510 时自动从别的项挤占
+        _EV_CAP = 510
+        _total = sum(v for v in ev_map.values() if v > 0)
+        if _total > _EV_CAP:
+            over = _total - _EV_CAP
+            flexible = [k for k, v in ev_map.items() if k not in ev_touched and v > 0]
+            squeezed: list[str] = []
+            if not flexible:
+                return (f"改完学习力总和 {_total}，超过 {_EV_CAP} 上限；"
+                        f"而且这轮指定的项全是固定项，没地方挤。"
+                        f"请同时指定要削哪一项，比如 `ev:spd=252,sp_atk=4`。")
+            # 按当前值比例挤
+            flex_total = sum(ev_map[k] for k in flexible)
+            for k in flexible:
+                cut = min(ev_map[k], round(over * ev_map[k] / flex_total)) if flex_total else 0
+                if cut > 0:
+                    ev_map[k] -= cut
+                    squeezed.append(f"{k}-{cut}")
+                    over -= cut
+            # 比例算下来可能有零头，按顺序补削
+            for k in flexible:
+                if over <= 0:
+                    break
+                cut = min(ev_map[k], over)
+                if cut > 0:
+                    ev_map[k] -= cut
+                    over -= cut
+            # 抹掉削成 0 的项
+            ev_map = {k: v for k, v in ev_map.items() if v > 0}
+            if squeezed:
+                applied.append("（超 510，从 " + "、".join(squeezed) + " 挤占）")
+            _total = sum(ev_map.values())
+
         if targets:
             for kk, want in targets.items():
                 # 其他项按原比例让出预算
