@@ -2643,8 +2643,12 @@ class SeerExpertPlugin(Star):
                 if not txt:
                     return f"留言板（{when}）现在是空的。"
                 # 太长就截断 —— 留言板是给人看的清单，不需要整篇进上下文
-                if len(txt) > 3000:
-                    txt = txt[:3000] + "\n\n……（后面还有，让维护那边精简一下）"
+                # 2026-11-17：3000 不够用（实际 3580 字，bot 少看了 580 字，
+                #             连「已知未修」整节都没读到），提到 8000。
+                #             ⚠ 如果又撞上限，先精简留言板，别一味调大 ——
+                #             整篇进上下文每轮都要花 token。
+                if len(txt) > 8000:
+                    txt = txt[:8000] + "\n\n……（后面还有，让维护那边精简一下）"
                 return f"【开发留言板 · {when}】\n\n{txt}"
 
         return ("留言板还没建。维护那边会在 `plugin_data/astrbot_plugin_seer_expert/"
