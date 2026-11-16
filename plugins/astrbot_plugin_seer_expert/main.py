@@ -1118,6 +1118,59 @@ class SeerExpertPlugin(Star):
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"[赛尔知识库] 专注模式注入失败: {exc}")
 
+
+    @filter.on_llm_request()
+    async def dev_note_guard(self, event: AstrMessageEvent, req=None):
+        """留言板有新版本时，自动提示一次「去读一下」。
+
+        2026-11-17 鱼片提出：不用他说「看留言」，让 bot 自己发现更新。
+        会更好 —— 但**不能每轮都提示**，那样浪费的 token 比手动提醒还贵。
+        所以记 mtime：同一版只提示一次，改了才再提示。
+
+        重启后内存清空 → 第一次对话会提示。这也合理：重启通常意味着刚改过东西。
+        """
+        if req is None:
+            return
+        try:
+            import os as _os
+
+            base = None
+            try:
+                base = _os.path.dirname(_os.path.abspath(self.kb._kb_path))  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+            cands = []
+            if base:
+                cands.append(_os.path.join(base, "_dev_note.md"))
+                cands.append(_os.path.join(_os.path.dirname(base), "plugin_data",
+                                           "astrbot_plugin_seer_expert", "_dev_note.md"))
+            path = next((c for c in cands if c and _os.path.isfile(c)), None)
+            if not path:
+                return
+
+            mtime = _os.path.getmtime(path)
+            last = getattr(self, "_dev_note_mtime", 0.0)
+            if mtime <= last:
+                return          # 同一版，已经提示过了
+            self._dev_note_mtime = mtime
+
+            import time as _t
+
+            when = _t.strftime("%m-%d %H:%M", _t.localtime(mtime))
+            parts = getattr(req, "extra_user_content_parts", None)
+            if parts is not None:
+                from astrbot.core.agent.message import TextPart
+
+                parts.append(TextPart(text=(
+                    f"【开发留言板有更新（{when}）】"
+                    "维护那边刚改过插件，里面写了要验证的清单和已知问题。"
+                    "本轮回答前先调一次 seer_dev_note 读一下；"
+                    "如果这轮只是普通聊天、跟改动无关，读过就行，不用向群友复述。"
+                )))
+                logger.debug(f"[赛尔] 留言板更新提示已注入（mtime={when}）")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[赛尔] 留言板更新检查失败（不影响对话）：{exc}")
+
     @staticmethod
     def _split(text: str, size: int = 900) -> list[str]:
         """按行切块，避免 QQ 单条消息过长被截断。"""
