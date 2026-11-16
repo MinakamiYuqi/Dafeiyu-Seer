@@ -1181,6 +1181,11 @@ class SeerExpertPlugin(Star):
                 self._dev_note_pending = True
                 self._dev_note_pending_at = __import__("time").time()
                 self._dev_note_hinted = False
+                # ★ 注入提示时还不知道清单里有没有活，先置 False。
+                #   真正的判定在 seer_dev_note 里（读到内容后才算数）。
+                #   不重置的话，上一轮留下的 has_work=True 会继续生效，
+                #   群友这轮正常要图也会被劫到私聊。
+                self._dev_note_has_work = False
                 logger.debug(f"[赛尔] 留言板更新提示已注入（mtime={when}）")
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"[赛尔] 留言板更新检查失败（不影响对话）：{exc}")
@@ -2646,6 +2651,48 @@ class SeerExpertPlugin(Star):
         return (f"已写回给维护方（{len(body)} 字，{now}）。"
                 f"他们下次改代码时会先看这个。")
 
+    @staticmethod
+    def _dev_note_has_pending_items(txt: str) -> bool:
+        """留言板里「当前待验项」那节，到底有没有实质内容。
+
+        2026-11-17 加。用来区分两种状态：
+          · 清单写着「（空）」或只有标题   → False，图照常发当前会话
+          · 清单里真有几条要验的         → True，测试期间图改发私聊
+
+        判断只看「当前待验项」这一节，别的地方（已知未修、怎么回写）不算活。
+        """
+        import re as _re2
+
+        if not txt:
+            return False
+
+        # 取「当前待验项」到下一个 ## 之间的内容
+        m = _re2.search(r"^##\s*当前待验项\s*$(.*?)(?=^##\s|\Z)", txt, _re2.M | _re2.S)
+        if not m:
+            return False
+        body = m.group(1)
+
+        # 明确的「空」标记
+        if "（空）" in body or "(空)" in body:
+            return False
+
+        # 去掉 markdown 装饰后还剩几行实质内容
+        lines = []
+        for ln in body.split("\n"):
+            t = ln.strip()
+            if not t:
+                continue
+            if t.startswith("---") or t.startswith(">"):
+                continue
+            # 去掉标题/空壳标记
+            t2 = _re2.sub(r"^#+\s*", "", t)
+            if not t2 or t2 in ("（空）", "(空)", "——", "无"):
+                continue
+            lines.append(t2)
+
+        # 至少要有几行像样的内容才算「有活」
+        return len(lines) >= 2
+
     def _dev_note_admins(self) -> list[str]:
         """取「开发通知收件人」的 QQ 号，只认纯数字。
 
@@ -2773,7 +2820,11 @@ class SeerExpertPlugin(Star):
         #   但「111」不需要验东西，它不会写回 → pending 永久 True
         #   → 之后群里任何人要图，全部掉私聊，群友以为 bot 坏了。
         _PENDING_TTL = 600.0
-        _pending = bool(getattr(self, "_dev_note_pending", False))
+        # ★ 2026-11-17：必须同时满足「读过清单」+「清单里真有未完成的活」+「没过期」。
+        #   只看 _dev_note_pending 会把群友正常要图也劫走 —— 留言板空着时它也会 True。
+        _pending = bool(getattr(self, "_dev_note_pending", False)) and bool(
+            getattr(self, "_dev_note_has_work", False)
+        )
         if _pending:
             _at = float(getattr(self, "_dev_note_pending_at", 0.0) or 0.0)
             _age = __import__("time").time() - _at
@@ -2864,9 +2915,18 @@ class SeerExpertPlugin(Star):
                 #   因为「读了清单」= 「即将按清单做事」，
                 #   从这一刻起算 10 分钟才合理（原来只在注入提示时计时，
                 #   如果 bot 隔了 9 分钟才真去读，剩 1 分钟就过期了）。
+                #
+                # ★★ 同日再改：pending 和「有没有活要干」拆成两个标志。
+                #   `_dev_note_pending` 只表示「读过还没写回」（给 dev_note_followup 提醒用）；
+                #   `_dev_note_has_work` 才表示「真在按清单验东西」（给 _send_image 决定发哪）。
+                #
+                #   不拆的后果：留言板清空成「（空）」时，bot 读了也 pending=True，
+                #   但永远不会写回 → pending 挂满 10 分钟 →
+                #   这段窗口里群里任何人要图都会掉到鱼片私聊，群友看不到。
                 try:
                     self._dev_note_pending = True
                     self._dev_note_pending_at = __import__("time").time()
+                    self._dev_note_has_work = self._dev_note_has_pending_items(txt)
                 except Exception:  # noqa: BLE001
                     pass
 
