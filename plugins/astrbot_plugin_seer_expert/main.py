@@ -2419,10 +2419,11 @@ class SeerExpertPlugin(Star):
                 line = ("  " + _lpad(nm, _NAME_W) + _rpad(str(tot), 7)
                         + "".join(_rpad(str(vl.get(k, 0)), 5) for k in keys))
                 mark = []
-                if tot == best_total:
+                _multi = sum(1 for r in rows if r[1] is not None) > 1
+                if _multi and tot == best_total:
                     mark.append("六项和最高")
                 win = [k for k in keys if vl.get(k, 0) and vl.get(k, 0) == best[k]]
-                if win and len(win) < len(keys):
+                if _multi and win and len(win) < len(keys):
                     mark.append("最高：" + "、".join(_cn.get(k, k) for k in win))
                 nz = sum(1 for k in keys if vl.get(k, 0))
                 if nz < len(keys):

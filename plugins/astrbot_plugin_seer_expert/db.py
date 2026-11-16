@@ -7853,6 +7853,15 @@ class SeerKnowledge:
         if not kw:
             return []
 
+        # ★ 2026-11-17 bot 报：关键词尾巴带「刻印」二字就查不到。
+        #   实测「卡布达攻刻印」0 条 / 「卡布达攻」5 条、「九天体刻印」0 条 / 「九天体」1 条。
+        #   因为「系列别名+方向词」那条分支把「攻刻印」当方向词去比了。
+        #   群友说话带后缀太正常，入口统剥一次；剥完为空才保留原词
+        #   （真有人只搜「刻印」两个字时还得能查）。
+        _stripped = re.sub(r"刻印$", "", kw).strip()
+        if _stripped:
+            kw = _stripped
+
         names = self._mint_resolve_names(kw, style)
 
         conn = self._open_manual("mintmark")
@@ -8262,7 +8271,14 @@ class SeerKnowledge:
                     "effect": str(_f(9) or "").strip(),
                 }
             )
-        out.sort(key=lambda x: (-x["total_with_extra"], len(x["name"])))
+        # ★ 2026-11-17 bot 报：「初级青龙体力刻印」这种六项全 0 的空壳排在最前，
+        #   看着像正经数据其实啥都没有。它们是升级前的低阶印 —— 不能删
+        #   （有人可能就找这个），但排到最后，并标 _empty 让调用方能识别。
+        for it in out:
+            it["_empty"] = (it.get("total_with_extra") or 0) == 0 and not it.get("max_vals")
+        out.sort(key=lambda x: (x.get("_empty", False),
+                                -(x["total_with_extra"] or 0),
+                                len(x["name"])))
         return out
 
 
