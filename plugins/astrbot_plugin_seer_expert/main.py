@@ -5891,15 +5891,6 @@ class SeerExpertPlugin(Star):
             return None, f"池子图渲染失败：{exc}"
         return data, ""
 
-    async def _send_image(self, event, data: bytes, prefix: str) -> bool:
-        """把图片字节发到当前会话。返回是否成功。"""
-        import tempfile
-        fd, path = tempfile.mkstemp(prefix=prefix, suffix=".jpg")
-        os.close(fd)
-        with open(path, "wb") as f:
-            f.write(data)
-        # 2026-11-17：统一走 _send_image —— 测试期间改发私聊，不在群里刷图
-        return await self._send_image(event, path, "池子卡")
 
     @llm_tool(name="seer_pool_card")
     async def seer_pool_card(self, event: AstrMessageEvent, mode: str = "") -> str:
