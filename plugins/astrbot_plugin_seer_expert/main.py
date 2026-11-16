@@ -2683,6 +2683,59 @@ class SeerExpertPlugin(Star):
 
         return [str(x) for x in cands if _re.fullmatch(r"\d{5,12}", str(x))]
 
+    async def _send_image(self, event, path: str, label: str = "") -> bool:
+        """把图片发到合适的会话 —— 测试期间改发私聊。
+
+        2026-11-17 加。鱼片担心「测试时 bot 在群里发图」，所以：
+          · 平时（没在按留言板验东西）→ 发当前会话，跟以前一样
+          · 测试中（_dev_note_pending 为真）→ 发私聊给管理员，群里一句不提
+
+        `_dev_note_pending` 在 seer_dev_note 被调用时置 True，
+        seer_dev_reply 写回时置 False —— 正好等于「正在验东西」。
+
+        返回是否至少发出去一次。
+        """
+        import os as _os
+
+        if not path or not _os.path.isfile(path):
+            return False
+
+        try:
+            from astrbot.core.message.components import Image as ImageComp
+            from astrbot.core.message.message_event_result import MessageChain
+        except Exception:  # noqa: BLE001
+            try:
+                from astrbot.core.message.message_result import MessageChain  # type: ignore
+                from astrbot.core.message.components import Image as ImageComp  # type: ignore
+            except Exception:  # noqa: BLE001
+                return False
+
+        targets = []
+        if getattr(self, "_dev_note_pending", False):
+            # 测试中 → 只发私聊，群里一个字都不发
+            for qq in self._dev_note_admins():
+                targets.append(f"onebot:FriendMessage:{qq}")
+            if targets:
+                logger.info(
+                    f"[赛尔] 测试期间{f'（{label}）' if label else ''}改发私聊，"
+                    f"避免在群里刷图"
+                )
+        if not targets:
+            umo = str(getattr(event, "unified_msg_origin", "") or "")
+            if not umo:
+                return False
+            targets.append(umo)
+
+        sent = 0
+        for t in targets:
+            try:
+                chain = MessageChain(chain=[ImageComp.fromFileSystem(path)])
+                await self.context.send_message(t, chain)
+                sent += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[seer_expert] 图片发送失败（{t}）: {exc}")
+        return sent > 0
+
     @llm_tool(name="seer_dev_note")
     async def seer_dev_note(self, event: AstrMessageEvent) -> str:
         """读「开发留言板」—— 维护这个插件的另一边会往里面写待验证的改动。
@@ -3877,14 +3930,7 @@ class SeerExpertPlugin(Star):
         os.close(fd)
         with open(path, "wb") as f:
             f.write(data)
-        _sent = False
-        try:
-            from astrbot.core.message.message_event_result import MessageChain
-            chain = MessageChain(chain=[ImageComp.fromFileSystem(path)])
-            await self.context.send_message(event.unified_msg_origin, chain)
-            _sent = True
-        except Exception as exc:
-            logger.warning("[seer_expert] 配置图发送失败: %s", exc)
+        _sent = await self._send_image(event, path, "配置图")
         # 记住这次用的参数，供后续增量修改
         try:
             _key = str(getattr(event, "unified_msg_origin", "") or "default")
@@ -4213,14 +4259,7 @@ class SeerExpertPlugin(Star):
         with open(path, "wb") as f:
             f.write(data)
 
-        _sent = False
-        try:
-            from astrbot.core.message.message_event_result import MessageChain
-            chain = MessageChain(chain=[ImageComp.fromFileSystem(path)])
-            await self.context.send_message(event.unified_msg_origin, chain)
-            _sent = True
-        except Exception as exc:
-            logger.warning("[seer_expert] 配置图发送失败: %s", exc)
+        _sent = await self._send_image(event, path, "配置图")
 
         self._config_cache[_key] = cur
         _six = " / ".join(f"{b['cn']}{b['value']}" for b in view.get("battle") or [])
@@ -5520,13 +5559,9 @@ class SeerExpertPlugin(Star):
         # 发图放在锁外，别让发送把下一次查询堵住
         path = data.get("image")
         if path and os.path.isfile(path):
-            try:
-                from astrbot.core.message.message_event_result import MessageChain
-                chain = MessageChain(chain=[ImageComp.fromFileSystem(path)])
-                await self.context.send_message(event.unified_msg_origin, chain)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[seer_roster] 阵容图发送失败: %s", exc)
-                return format_roster(data) + f"\n（图没发出去：{exc}）"
+            _ok = await self._send_image(event, path, "阵容图")
+            if not _ok:
+                return format_roster(data) + "\n（图没发出去）"
         return format_roster(data)
 
     # ── 夯拉榜（分级榜梗图）──────────────────────────────────
@@ -5754,21 +5789,8 @@ class SeerExpertPlugin(Star):
         with open(path, "wb") as f:
             f.write(data)
 
-        sent = False
-        try:
-            from astrbot.core.message.message_result import MessageChain  # 兼容旧路径
-        except Exception:
-            try:
-                from astrbot.core.message.message_event_result import MessageChain
-            except Exception:
-                MessageChain = None  # type: ignore
-        if MessageChain is not None:
-            try:
-                chain = MessageChain(chain=[ImageComp.fromFileSystem(path)])
-                await self.context.send_message(event.unified_msg_origin, chain)
-                sent = True
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[seer_tier_list] 榜单图发送失败: %s", exc)
+        # 2026-11-17：统一走 _send_image —— 测试期间改发私聊，不在群里刷图
+        sent = await self._send_image(event, path, "榜单图")
 
         # 文字部分：只报状态，不重复图里的内容
         total = sum(len(v) for v in resolved.values())
@@ -5845,23 +5867,8 @@ class SeerExpertPlugin(Star):
         os.close(fd)
         with open(path, "wb") as f:
             f.write(data)
-        try:
-            from astrbot.core.message.message_result import MessageChain
-        except Exception:
-            try:
-                from astrbot.core.message.message_event_result import MessageChain
-            except Exception:
-                MessageChain = None  # type: ignore
-        if MessageChain is None:
-            return False
-        try:
-            from astrbot.api.message_components import Image as ImageComp
-            chain = MessageChain(chain=[ImageComp.fromFileSystem(path)])
-            await self.context.send_message(event.unified_msg_origin, chain)
-            return True
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[pool_card] 发送失败: %s", exc)
-            return False
+        # 2026-11-17：统一走 _send_image —— 测试期间改发私聊，不在群里刷图
+        return await self._send_image(event, path, "池子卡")
 
     @llm_tool(name="seer_pool_card")
     async def seer_pool_card(self, event: AstrMessageEvent, mode: str = "") -> str:
