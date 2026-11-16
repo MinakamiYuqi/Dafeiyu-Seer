@@ -747,3 +747,62 @@ https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/astrbot_pl
 - 六图展示：配置生成 / 配置速查 / 伤害计算 / 必先判定 / 查阵容 / 查巅峰
 - README 标题改成「大肥鱼 占领赛尔号」
 - banner 换成参考图直出：Q版肥鱼站在赛尔号飞船顶上
+
+---
+
+## 🛠 二次开发 / 想改代码的看这里
+
+**插件能跑起来只是第一步。** 真正耗时间的是那些「不报错但结果不对」的坑 ——
+所以我们把开发过程中用的工具和踩过的坑一起放进了仓库：
+
+```
+devtools/    改代码时自己用的工具（不在插件里，不影响运行）
+docs/        开发指南 + 251 条踩坑记录 + db.py 方法索引
+```
+
+### 先读 `docs/开发指南.md`
+
+不是 API 文档，是**路标**：哪三个数据源别搞混、哪些表名是过时的、哪个坑代价最大。
+里面的每条「坑」都对应一次真实的翻车，附现象和定位方法。
+
+几个最值钱的：
+
+| 坑 | 现象 | 为什么值得看 |
+|---|---|---|
+| 16 | 工具「没参数」、模型瞎猜 | `@llm_tool` 的 schema **只从 docstring 的 `Args:` 段来**，函数签名一眼不看。写漏一个参数，模型永远看不到它，**而且不报错** |
+| 24 | 「改了没生效」 | `get_astrbot_plugin_data_path()` 在 `cwd=实例根` 时返回的路径**少一层 core**，拼出来的目录不存在 → 本地缓存永不命中 |
+| 25 | 同一个数在两个工具里不一样 | 同一个参数的默认值写在两处，必然漂。我们一天踩了四次 |
+
+### `devtools/` 里有什么
+
+```powershell
+# 排查 bot 为什么不回话（日志是 UTF-8，Get-Content 按 GBK 解会全乱码）
+& $venv devtools\log.py --errors
+& $venv devtools\log.py --tools          # 看它调了哪些工具、参数、返回
+
+# 改完代码的一条龙
+& $venv devtools\audit_seer.py
+& $venv devtools\audit_tool_docstrings.py   # 防坑 16
+& $venv devtools\audit_defaults.py          # 防坑 25
+& $venv devtools\sync.py --apply            # 同步到实例（三个地方，漏一个就白测）
+
+# db.py 8900 行读不动？先生成索引
+& $venv devtools\gen_db_index.py            # → docs/db_索引.md
+```
+
+**所有工具的路径都不写死**，按 `SEER_WORKSPACE` / `SEER_INSTANCE` 环境变量找，
+不设就从自身位置往上推；找不到会**报错告诉你该设哪个**，不会偷偷用绝对路径。
+
+详见 [`devtools/README.md`](devtools/README.md)。
+
+### 我们踩坑时总结的几条规矩
+
+```
+① 默认值只写一处 —— 两个入口各写一遍，早晚漂（坑 25）
+② 数据路径不写死 —— 环境变量优先，其次是框架 API，最稳的是「从已知能读到的文件反推」（坑 24）
+③ 失败路径要响 —— 返回一句「不支持」等于静默失效（坑 18）
+④ 手工清单必然过时 —— 能生成的别手写，加 --check 进 CI（坑 21）
+⑤ 跑 Python 写文件，别内联 —— 三层引号嵌套的转义地狱（坑 26）
+```
+
+**这些不是教条，是账单。** 每条都对应一次「改了没生效 / 数对不上 / 静默失效」。
