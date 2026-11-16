@@ -2850,15 +2850,44 @@ class SeerExpertPlugin(Star):
         if not umo:
             return False
 
+        # ★ 2026-11-17：发送失败重试一次。
+        #   日志实证 06:12:15 —— 连续两次发图会被 NapCat 挡，
+        #   报 <ActionFailed status='failed' retcode=100>，隔 20 秒再发就正常。
+        #   retcode=100 是 OneBot 侧的失败码（通常是发图太频繁），不是我们的 bug，
+        #   但对用户来说就是「图没出现」，所以等一下重发一次。
+        import asyncio as _aio
+
+        _last_exc = None
         try:
-            chain = MessageChain(chain=[ImageComp.fromFileSystem(path)])
-            await self.context.send_message(umo, chain)
-            return True
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"[seer_expert] 图片发送失败{f'（{label}）' if label else ''}: {exc}")
+            for _attempt in (1, 2):
+                try:
+                    chain = MessageChain(chain=[ImageComp.fromFileSystem(path)])
+                    await self.context.send_message(umo, chain)
+                    if _attempt > 1:
+                        logger.info(
+                            f"[seer_expert] 图片第 {_attempt} 次发送成功"
+                            f"{f'（{label}）' if label else ''}"
+                        )
+                    return True
+                except Exception as exc:  # noqa: BLE001
+                    _last_exc = exc
+                    _s = str(exc)
+                    _retryable = ("retcode=100" in _s) or ("ActionFailed" in _s)
+                    if _attempt == 1 and _retryable:
+                        logger.info(
+                            f"[seer_expert] 图片被平台拒绝（多半是发图太频繁），"
+                            f"1.5 秒后重试{f'（{label}）' if label else ''}: {_s[:110]}"
+                        )
+                        await _aio.sleep(1.5)
+                        continue
+                    break
+            logger.warning(
+                f"[seer_expert] 图片发送失败{f'（{label}）' if label else ''}: {_last_exc}"
+            )
             return False
         finally:
-            # 由本函数创建的临时文件，发完就删（Windows 上 AstrBot 已读进内存）
+            # 由本函数创建的临时文件，不管成功失败都清掉
+            # （Windows 上 AstrBot 已经把图读进内存了，删文件不影响发送）
             if _tmp_to_clean:
                 try:
                     _os.unlink(_tmp_to_clean)
