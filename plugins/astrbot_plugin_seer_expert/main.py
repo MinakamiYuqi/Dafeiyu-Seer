@@ -1,6 +1,7 @@
 """赛尔知识库插件：把 SeerAPI 本地库变成可调用的工具，查不到就让人补。"""
 from __future__ import annotations
 
+import io
 import hashlib
 import re
 import json
@@ -2287,6 +2288,122 @@ class SeerExpertPlugin(Star):
         return (f"套装 / 称号 / 目镜里都没找到「{t}」。"
                 + (f"（{hint}）" if hint else "")
                 + "　试试简称：圣芒 / 晨曦 / 裁决 / 神话 / 星光之旅 / 漫游者-AH")
+
+
+    # 允许 seer_read_code 读取的根目录名（就是 3 个赛尔插件）
+    _CODE_ROOTS = ("astrbot_plugin_seer_expert", "astrbot_plugin_seer_info",
+                   "astrbot_plugin_seer_dsh")
+    _CODE_EXTS = (".py", ".j2", ".html", ".json", ".md", ".txt", ".css", ".js")
+
+    def _resolve_code_path(self, rel: str) -> tuple[str | None, str]:
+        """把用户给的相对路径解析成一个**白名单内**的真实文件路径。
+
+        返回 (绝对路径, 错误说明)；路径非法或越界时返回 (None, 原因)。
+        """
+        import os as _os
+
+        raw = str(rel or "").strip().replace("\\", "/").lstrip("/")
+        if not raw:
+            return None, "给个路径，比如 db.py 或 service.py"
+        if ".." in raw.split("/"):
+            return None, "路径里不能有 .."
+        if _os.path.isabs(raw) or (len(raw) > 1 and raw[1] == ":"):
+            return None, "只收相对路径（如 db.py），不收绝对路径"
+        if not raw.lower().endswith(self._CODE_EXTS):
+            return None, "只能读源码/模板/文档：" + " ".join(self._CODE_EXTS)
+
+        base = _os.path.dirname(_os.path.abspath(__file__))
+        plugins_root = _os.path.dirname(base)          # ...\plugins
+        cur_name = _os.path.basename(base)             # 当前插件名
+
+        # 支持两种写法：只写文件名（默认本插件） / 写全 插件名/文件
+        cands = []
+        if raw.split("/")[0] in self._CODE_ROOTS:
+            cands.append(_os.path.join(plugins_root, raw))
+        else:
+            cands.append(_os.path.join(base, raw))
+
+        for cand in cands:
+            real = _os.path.realpath(cand)
+            # ★ 关键：realpath 之后再校验，防符号链接跳出白名单
+            ok = any(
+                _os.path.commonpath([real, _os.path.realpath(_os.path.join(plugins_root, r))])
+                == _os.path.realpath(_os.path.join(plugins_root, r))
+                for r in self._CODE_ROOTS
+                if _os.path.isdir(_os.path.join(plugins_root, r))
+            )
+            if not ok:
+                continue
+            if _os.path.isfile(real):
+                return real, ""
+        return None, f"没找到「{raw}」（只在 {cur_name} 和另外两个赛尔插件里找）"
+
+    @llm_tool(name="seer_read_code")
+    async def seer_read_code(self, event: AstrMessageEvent, path: str,
+                             pattern: str = "", start: int = 0,
+                             limit: int = 200) -> str:
+        """只读地看赛尔插件的源码 —— 想知道某个数字/规则是从哪来的就用它。
+
+        # 什么时候用
+        群友问的数值你觉得可疑、或者要给一个**有依据**的回答时，
+        与其猜，不如翻源码确认。**只在赛尔插件里找**，别的地方读不到。
+
+        # 注意
+        · 只读，没有任何写操作
+        · 默认返回 200 行，上限 400 —— 要看的范围大就分几次，配合 pattern 筛
+        · 路径写相对路径：`db.py` / `main.py`，或跨插件写
+          `astrbot_plugin_seer_info/service.py`
+
+        Args:
+            path(string): 相对路径，如 `db.py`、`service.py`、
+                `templates/config_card/template.html.j2`
+            pattern(string): 只返回**含这个词**的行（带行号）。留空返回整段
+            start(number): 从第几行开始（0 表示开头），配合 limit 翻页
+            limit(number): 最多返回多少行，默认 200，上限 400
+        """
+        import os as _os
+
+        real, err = self._resolve_code_path(path)
+        if not real:
+            return err
+
+        try:
+            n = max(1, min(int(limit or 200), 400))
+        except Exception:  # noqa: BLE001
+            n = 200
+        try:
+            off = max(0, int(start or 0))
+        except Exception:  # noqa: BLE001
+            off = 0
+
+        try:
+            lines = io.open(real, encoding="utf-8", errors="replace").read().split("\n")
+        except OSError as exc:
+            return f"读不了 {path}：{exc}"
+
+        total = len(lines)
+        rel_show = _os.path.relpath(real, _os.path.dirname(_os.path.dirname(real)))
+
+        if pattern:
+            kw = str(pattern).strip()
+            hits = [(i + 1, ln) for i, ln in enumerate(lines) if kw in ln]
+            if not hits:
+                return f"{rel_show} 里没有含「{kw}」的行（共 {total} 行）"
+            show = hits[:n]
+            body = "\n".join(f"  {no:>5}: {ln.rstrip()[:160]}" for no, ln in show)
+            tail = (f"\n  …… 还有 {len(hits) - len(show)} 条没显示"
+                    if len(hits) > len(show) else "")
+            return f"{rel_show}　含「{kw}」的 {len(hits)} 行：\n{body}{tail}"
+
+        seg = lines[off: off + n]
+        if not seg:
+            return f"{rel_show} 只有 {total} 行，从第 {off} 行开始没有内容了"
+        body = "\n".join(f"  {off + i + 1:>5}: {ln.rstrip()[:160]}"
+                          for i, ln in enumerate(seg))
+        tail = (f"\n  …… 还有 {total - off - len(seg)} 行"
+                if total > off + len(seg) else "")
+        return (f"{rel_show}　第 {off + 1}~{off + len(seg)} 行 / 共 {total} 行：\n"
+                f"{body}{tail}")
 
     @llm_tool(name="seer_gem")
     async def seer_gem(self, event: AstrMessageEvent, keyword: str = "") -> str:
