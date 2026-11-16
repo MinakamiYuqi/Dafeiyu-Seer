@@ -1129,19 +1129,11 @@ class SeerExpertPlugin(Star):
 
         重启后内存清空 → 第一次对话会提示。这也合理：重启通常意味着刚改过东西。
 
-        ★ 2026-11-17 加：**只在私聊注入**。
-          鱼片问「群里别人艾特 bot，他会不会自顾自跟别人说这些」——
-          提示词里虽然写了「不用向群友复述」，但那是软约束，模型可以不理。
-          从根上解决：群聊根本不注入，它不知道就不会说。
+        ★ 2026-11-17 定稿：**群聊和私聊都注入**，但要求「测完私聊汇报，别在群里说」。
+          鱼片原话：「改成群里触发之后，bot 测试完主动私聊跟我说这件事怎么样」
+          —— 群里 @bot 是最自然的触发，结果私聊给他，两边都不打扰。
         """
         if req is None:
-            return
-        # 群聊不碰 —— 判断方式和 auto_fact_private 一致
-        try:
-            _umo = str(getattr(event, "unified_msg_origin", "") or "")
-            if "FriendMessage" not in _umo:
-                return
-        except Exception:  # noqa: BLE001
             return
         try:
             import os as _os
@@ -1178,7 +1170,8 @@ class SeerExpertPlugin(Star):
                     "维护那边刚改过插件，里面写了要验证的清单和已知问题。"
                     "本轮回答前先调一次 seer_dev_note 读一下；"
                     "如果这轮只是普通聊天、跟改动无关，读过就行。"
-            "**绝对不要在回复里提到留言板、清单、测试这些词** —— 群友看不到那个文件，提了只会莫名其妙。"
+            "**验完之后用 seer_dev_reply 写回结论 —— 它会自动私聊维护方，不用你在群里说。**"
+            "**回复群友时绝对不要提留言板、清单、测试这些词** —— 群友看不到那个文件，提了只会莫名其妙。"
                     "※ 验完之后用 seer_dev_reply 把结论写回去，维护那边靠这个推进。"
                 )))
                 # ★ 2026-11-17：挂个 pending，下一轮提醒它写回（见 dev_note_followup）
@@ -1195,15 +1188,9 @@ class SeerExpertPlugin(Star):
         2026-11-17 鱼片问「它不会自己写吗」。不会 —— 工具必须被调用，
         而且「验完」只有模型自己知道。这里只做「提醒」，不替它判断。
 
-        ★ 2026-11-17：同样只在私聊里提醒 —— 群里不打扰群友。
+        ★ 2026-11-17：群聊私聊都提醒（跟 dev_note_guard 一致）。
         """
         if req is None:
-            return
-        try:
-            _umo = str(getattr(event, "unified_msg_origin", "") or "")
-            if "FriendMessage" not in _umo:
-                return
-        except Exception:  # noqa: BLE001
             return
         if not getattr(self, "_dev_note_pending", False):
             return
@@ -2615,11 +2602,86 @@ class SeerExpertPlugin(Star):
             self._dev_note_pending = False      # ★ 写过了，别再提醒
             self._dev_note_hinted = False
             logger.info(f"[赛尔] bot 写了测试反馈（{len(body)} 字）→ {path}")
+
+            # ★ 2026-11-17：写完之后私聊所有管理员。
+            #   这样在群里触发测试也行 —— 群友看不到，鱼片私聊收到。
+            #   全程 try/except：通知失败不能影响工具本身的返回值。
+            _notified = 0
+            try:
+                n_lines = len([ln for ln in body.split("\n") if ln.strip()])
+                _head = body.strip().split("\n")
+                # 取前 6 行非空内容做摘要
+                _brief = "\n".join([ln for ln in _head if ln.strip()][:6])[:400]
+
+                from astrbot.core.message.components import Plain
+                from astrbot.core.message.message_event_result import MessageChain
+
+                _msg = (
+                    f"【测试反馈】我刚写回了一版（{now}，{len(body)} 字 / {n_lines} 行）\n\n"
+                    f"{_brief}\n\n"
+                    f"（完整内容在 _dev_reply.md，维护方跑 check_reply.py 能读到）"
+                )
+
+                for _qq in self._dev_note_admins():
+                    try:
+                        await self.context.send_message(
+                            f"onebot:FriendMessage:{_qq}",
+                            MessageChain([Plain(_msg)]),
+                        )
+                        _notified += 1
+                    except Exception as _exc:  # noqa: BLE001
+                        logger.debug(f"[赛尔] 反馈通知发不到 {_qq}: {_exc}")
+            except Exception as _exc:  # noqa: BLE001
+                logger.debug(f"[赛尔] 反馈通知整体失败（不影响写回）：{_exc}")
+
+            if _notified:
+                logger.info(f"[赛尔] 已把反馈摘要私聊给 {_notified} 个管理员")
         except OSError as exc:
             return f"写反馈失败：{exc}（磁盘满了？或者目录只读）"
 
         return (f"已写回给维护方（{len(body)} 字，{now}）。"
                 f"他们下次改代码时会先看这个。")
+
+    def _dev_note_admins(self) -> list[str]:
+        """取管理员 QQ 号（只要纯数字的）。seer_dev_reply 写完会私聊他们。
+
+        路径从 self.kb._kb_path 上溯 —— 那个是运行时真正读到的库，
+        往上一层层拼得到 cmd_config.json（坑 24 的老办法，别用 __file__）。
+        """
+        import json as _json
+        import os as _os
+        import re as _re
+
+        cands: list[str] = []
+        kb_path = None
+        try:
+            kb_path = getattr(getattr(self, "kb", None), "_kb_path", None)
+        except Exception:  # noqa: BLE001
+            kb_path = None
+
+        tries = []
+        if kb_path:
+            d = _os.path.dirname(_os.path.abspath(str(kb_path)))
+            for _ in range(5):
+                tries.append(_os.path.join(d, "cmd_config.json"))
+                d = _os.path.dirname(d)
+        env_inst = _os.environ.get("ASTRBOT_INSTANCE") or _os.environ.get("ASTRBOT_ROOT")
+        if env_inst:
+            tries.append(_os.path.join(env_inst, "core", "data", "cmd_config.json"))
+
+        for p in tries:
+            if not _os.path.isfile(p):
+                continue
+            try:
+                with io.open(p, encoding="utf-8-sig") as f:
+                    d2 = _json.load(f)
+                cands = list(d2.get("admins_id") or [])
+                if cands:
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+
+        return [str(x) for x in cands if _re.fullmatch(r"\d{5,12}", str(x))]
 
     @llm_tool(name="seer_dev_note")
     async def seer_dev_note(self, event: AstrMessageEvent) -> str:
