@@ -2338,6 +2338,116 @@ class SeerExpertPlugin(Star):
                 return real, ""
         return None, f"没找到「{raw}」（只在 {cur_name} 和另外两个赛尔插件里找）"
 
+
+    @llm_tool(name="seer_equip_compare")
+    async def seer_equip_compare(self, event: AstrMessageEvent,
+                                 suits: str = "", titles: str = "",
+                                 eyes: str = "") -> str:
+        """把**多件**套装 / 称号 / 目镜摆成一张表横向对比，六项对齐、标出每列最高。
+
+        # 什么时候用
+        群友问「圣芒和裁决哪个好」「星光之旅和神话差多少」「这几个目镜怎么选」时用它。
+        **单件查数值用 seer_equip，两件以上对比用这个** —— 别来回切。
+
+        # 输出长这样
+        ```
+        【套装】
+          名称           六项和   攻击  防御  特攻  特防  速度  体力
+          圣芒佑界套装      500     80    80    80    80    80   100  ← 最高
+          影翼裁决套装      460     60    60    60    60    90   130
+        ```
+
+        # 注意
+        · 三类可以同时给，也可以只给一类
+        · 每类按六项和降序排，最上面那个就是这类的性价比之王
+        · 某类只给一件也会正常输出（虽然没什么可比性）
+
+        Args:
+            suits(string): 套装名，逗号分隔，如 `圣芒,裁决`
+            titles(string): 称号名，逗号分隔，如 `星光之旅,神话`
+            eyes(string): 目镜名，逗号分隔，如 `漫游者-AH,漫游者-AS`
+        """
+        import unicodedata
+
+        def _dw(x: str) -> int:
+            """显示宽度：中文/全角算 2。f-string 的 <N 只数字符，中文会错开。"""
+            return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in x)
+
+        def _lpad(x: str, w: int) -> str:
+            return x + " " * max(0, w - _dw(x))
+
+        def _rpad(x: str, w: int) -> str:
+            return " " * max(0, w - _dw(x)) + x
+
+        _cn = getattr(self.kb, "_STAT_CN", {}) or {}
+        keys = ["atk", "def", "sp_atk", "sp_def", "spd", "hp"]
+        _NAME_W = 16
+        head = ("  " + _lpad("名称", _NAME_W) + _rpad("六项和", 7)
+                + "".join(_rpad(_cn.get(k, k), 5) for k in keys))
+
+        def _split(v: str) -> list[str]:
+            return [x.strip() for x in str(v or "").replace("，", ",").split(",") if x.strip()]
+
+        def _table(group: list[str], label: str, fn) -> list[str]:
+            rows = []
+            for name in group:
+                try:
+                    info = fn(name) or {}
+                except Exception:  # noqa: BLE001
+                    info = {}
+                if not info:
+                    rows.append((None, name, {}))
+                    continue
+                vals = {k: int((info.get("vals") or {}).get(k, 0) or 0) for k in keys}
+                rows.append((info.get("name") or name,
+                             int(info.get("total") or sum(vals.values())), vals))
+            # 按六项和降序（查不到的沉底）
+            rows.sort(key=lambda r: (r[1] is not None, r[1] or 0), reverse=True)
+            # 每列最高 —— **0 不参与比较**（影翼裁决只有三项有值，
+            # 拿它去跟「防御 0」比会得出「它防御最高」的荒唐结论）
+            best = {}
+            for k in keys:
+                vals_k = [r[2].get(k, 0) for r in rows if r[1] is not None and r[2].get(k, 0) > 0]
+                best[k] = max(vals_k) if vals_k else 0
+            best_total = max((r[1] for r in rows if r[1] is not None), default=0)
+
+            out = [f"【{label}】", head]
+            for nm, tot, vl in rows:
+                if tot is None:
+                    out.append("  " + _lpad(nm, _NAME_W) + _rpad("查不到", 12))
+                    continue
+                line = ("  " + _lpad(nm, _NAME_W) + _rpad(str(tot), 7)
+                        + "".join(_rpad(str(vl.get(k, 0)), 5) for k in keys))
+                mark = []
+                if tot == best_total:
+                    mark.append("六项和最高")
+                win = [k for k in keys if vl.get(k, 0) and vl.get(k, 0) == best[k]]
+                if win and len(win) < len(keys):
+                    mark.append("最高：" + "、".join(_cn.get(k, k) for k in win))
+                nz = sum(1 for k in keys if vl.get(k, 0))
+                if nz < len(keys):
+                    mark.append(f"只加 {nz} 项")
+                if mark:
+                    line += "  ← " + "；".join(mark)
+                out.append(line)
+            return out
+
+        blocks = []
+        for group, label, fn in (
+            (_split(suits), "套装", self.kb.lookup_suit),
+            (_split(titles), "称号", self.kb.lookup_title),
+            (_split(eyes), "目镜", self.kb.lookup_eyepiece),
+        ):
+            if group:
+                blocks.append(chr(10).join(_table(group, label, fn)))
+
+        if not blocks:
+            return ("给要对比的装备名，逗号分隔。例如：\n"
+                    "  suits=\"圣芒,裁决\"\n"
+                    "  titles=\"星光之旅,神话\"\n"
+                    "  eyes=\"漫游者-AH,漫游者-AS\"")
+        return (chr(10) + chr(10) + chr(10)).join(blocks)
+
     @llm_tool(name="seer_read_code")
     async def seer_read_code(self, event: AstrMessageEvent, path: str,
                              pattern: str = "", start: int = 0,
