@@ -2503,6 +2503,70 @@ class SeerExpertPlugin(Star):
         return (chr(10) + chr(10) + chr(10)).join(blocks)
 
 
+
+    @llm_tool(name="seer_dev_reply")
+    async def seer_dev_reply(self, event: AstrMessageEvent, text: str) -> str:
+        """把测试结果/问题反馈写回给维护方（只写一个固定文件，覆盖式）。
+
+        # 什么时候用
+        你刚读过 `seer_dev_note` 里的清单、并按清单验过之后，用它把结论写回去。
+        **只在你确实验过东西时才用** —— 普通聊天不要调。
+
+        # 写什么
+        简洁点，维护方要看的是结论不是过程：
+          · 哪几条通过了（写「✅ 圣芒 500」这种一行一条）
+          · 哪几条不对，实际是什么
+          · 新发现的问题
+          · 你觉得可以但不急的改进建议
+
+        # 注意
+        这个文件**只能写这一个**，路径写死，改不了别的。
+        每次调用会**覆盖**上一版（历史在 git 里，不用你自己攒）。
+        最多收 4000 字，超了会截断 —— 别把整个上下文灌进来。
+
+        Args:
+            text(string): 要写回的反馈内容。用 markdown，一行一条最清楚。
+        """
+        import os as _os
+
+        body = str(text or "").strip()
+        if not body:
+            return "什么也没写。把测试结论写进来，比如「✅ 三件套对比 全过」这种一行一条。"
+
+        if len(body) > 4000:
+            body = body[:4000] + "\n\n……（超 4000 字已截断，下次精简点）"
+
+        # 路径：和留言板同目录，文件名写死
+        base = None
+        try:
+            base = _os.path.dirname(_os.path.abspath(self.kb._kb_path))  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+        if not base:
+            return "找不到数据目录，写不了反馈。"
+
+        path = _os.path.join(base, "_dev_reply.md")
+
+        import datetime as _dt
+
+        now = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+        content = (f"# bot 的测试反馈\n\n"
+                   f"> 写入时间：{now}\n"
+                   f"> （每次覆盖，历史在 git）\n\n"
+                   f"---\n\n{body}\n")
+
+        try:
+            tmp = path + ".tmp"
+            with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                f.write(content)
+            _os.replace(tmp, path)
+            logger.info(f"[赛尔] bot 写了测试反馈（{len(body)} 字）→ {path}")
+        except OSError as exc:
+            return f"写反馈失败：{exc}（磁盘满了？或者目录只读）"
+
+        return (f"已写回给维护方（{len(body)} 字，{now}）。"
+                f"他们下次改代码时会先看这个。")
+
     @llm_tool(name="seer_dev_note")
     async def seer_dev_note(self, event: AstrMessageEvent) -> str:
         """读「开发留言板」—— 维护这个插件的另一边会往里面写待验证的改动。
