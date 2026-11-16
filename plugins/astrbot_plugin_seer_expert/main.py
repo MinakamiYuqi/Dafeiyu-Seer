@@ -1166,10 +1166,42 @@ class SeerExpertPlugin(Star):
                     "维护那边刚改过插件，里面写了要验证的清单和已知问题。"
                     "本轮回答前先调一次 seer_dev_note 读一下；"
                     "如果这轮只是普通聊天、跟改动无关，读过就行，不用向群友复述。"
+                    "※ 验完之后用 seer_dev_reply 把结论写回去，维护那边靠这个推进。"
                 )))
+                # ★ 2026-11-17：挂个 pending，下一轮提醒它写回（见 dev_note_followup）
+                self._dev_note_pending = True
+                self._dev_note_hinted = False
                 logger.debug(f"[赛尔] 留言板更新提示已注入（mtime={when}）")
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"[赛尔] 留言板更新检查失败（不影响对话）：{exc}")
+
+    @filter.on_llm_request()
+    async def dev_note_followup(self, event: AstrMessageEvent, req=None):
+        """读过留言板但还没写回 → 下一轮提醒一句「验完记得写」。
+
+        2026-11-17 鱼片问「它不会自己写吗」。不会 —— 工具必须被调用，
+        而且「验完」只有模型自己知道。这里只做「提醒」，不替它判断。
+        """
+        if req is None:
+            return
+        if not getattr(self, "_dev_note_pending", False):
+            return
+        if getattr(self, "_dev_note_hinted", False):
+            return          # 这一版已经提醒过了，别每轮都念
+        try:
+            parts = getattr(req, "extra_user_content_parts", None)
+            if parts is None:
+                return
+            from astrbot.core.agent.message import TextPart
+
+            parts.append(TextPart(text=(
+                "【上次的开发留言板】你读过清单了，如果已经验完，"
+                "用 seer_dev_reply 把结论写回去（一行一条，通过的写 ✅、不对的写 ❌+实际值）；"
+                "还没验完就不用写，等验完再说。"
+            )))
+            self._dev_note_hinted = True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[赛尔] 留言板跟进提醒失败（不影响对话）：{exc}")
 
     @staticmethod
     def _split(text: str, size: int = 900) -> list[str]:
@@ -2560,6 +2592,8 @@ class SeerExpertPlugin(Star):
             with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
                 f.write(content)
             _os.replace(tmp, path)
+            self._dev_note_pending = False      # ★ 写过了，别再提醒
+            self._dev_note_hinted = False
             logger.info(f"[赛尔] bot 写了测试反馈（{len(body)} 字）→ {path}")
         except OSError as exc:
             return f"写反馈失败：{exc}（磁盘满了？或者目录只读）"
