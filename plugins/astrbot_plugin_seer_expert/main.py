@@ -2647,7 +2647,16 @@ class SeerExpertPlugin(Star):
                 f"他们下次改代码时会先看这个。")
 
     def _dev_note_admins(self) -> list[str]:
-        """取管理员 QQ 号（只要纯数字的）。seer_dev_reply 写完会私聊他们。
+        """取「开发通知收件人」的 QQ 号，只认纯数字。
+
+        2026-11-17 改：优先读插件配置的 `dev_notify_qq`。
+        原因：admins_id 里混着 bot 自己的号（3972662724），
+        直接发就成了「自己给自己发私聊」。
+        但**不能**从 admins_id 里删掉 bot 自己 —— 那可能影响它的管理员权限判定。
+
+        所以加一层专用配置：
+            dev_notify_qq = "2673100700"      ← 只发给这个号
+        没配的话才回落 admins_id（用旧行为，但也没办法区分 bot 自己）。
 
         路径从 self.kb._kb_path 上溯 —— 那个是运行时真正读到的库，
         往上一层层拼得到 cmd_config.json（坑 24 的老办法，别用 __file__）。
@@ -2656,6 +2665,51 @@ class SeerExpertPlugin(Star):
         import os as _os
         import re as _re
 
+        # ① 专用配置项优先（三层读取，确保能拿到）
+        _raw = ""
+        try:
+            _cfg = getattr(self, "cfg", None)
+            if _cfg is not None:
+                try:
+                    _raw = str(_cfg.get("dev_notify_qq") or "")
+                except Exception:  # noqa: BLE001
+                    _raw = ""
+        except Exception:  # noqa: BLE001
+            _raw = ""
+
+        # ② self.cfg 里没有？直接读插件配置文件。
+        #    ⚠ 2026-11-17：插件没有 _conf_schema.json，
+        #    AstrBot 可能只把「声明过的项」塞进 self.cfg，
+        #    那样写在 json 里的 dev_notify_qq 就读不到，所以这里兜一层。
+        if not _raw:
+            try:
+                _kb_path = getattr(getattr(self, "kb", None), "_kb_path", None)
+                if _kb_path:
+                    _d = _os.path.dirname(_os.path.abspath(str(_kb_path)))
+                    for _ in range(5):
+                        _cand = _os.path.join(_d, "config",
+                                              "astrbot_plugin_seer_expert_config.json")
+                        if _os.path.isfile(_cand):
+                            with io.open(_cand, encoding="utf-8-sig") as _f:
+                                _cj = _json.load(_f)
+                            _raw = str(_cj.get("dev_notify_qq") or "")
+                            break
+                        _d = _os.path.dirname(_d)
+            except Exception:  # noqa: BLE001
+                _raw = ""
+
+        # ③ 环境变量
+        if not _raw:
+            _raw = str(_os.environ.get("SEER_DEV_NOTIFY_QQ") or "")
+
+        if _raw:
+            _picked = [x.strip() for x in _re.split(r"[,\s]+", _raw)
+                       if _re.fullmatch(r"\d{5,12}", x.strip())]
+            if _picked:
+                logger.debug(f"[赛尔] 开发通知只发给: {_picked}")
+                return _picked
+
+        # ② 没配 → 回落 admins_id（旧行为）
         cands: list[str] = []
         kb_path = None
         try:
