@@ -244,7 +244,6 @@ class SeerExpertPlugin(Star):
             return False
 
 
-
     # ---------------- 出站消息清洗：去掉模型漏出来的“代码样”标记 ----------------
     @staticmethod
     def _clean_outgoing(text: str) -> str:
@@ -475,27 +474,6 @@ class SeerExpertPlugin(Star):
             pass
         return out
 
-        cands = []
-        # 依次尝试几个可能的位置
-        for rel in ("core/data/cmd_config.json", "data/cmd_config.json"):
-            # 从插件目录往上找实例根
-            cur = _os.path.dirname(_os.path.abspath(__file__))
-            for _ in range(6):
-                p = _os.path.join(cur, rel)
-                if _os.path.isfile(p):
-                    try:
-                        with io.open(p, encoding="utf-8-sig") as f:
-                            d = _json.load(f)
-                        cands = list(d.get("admins_id") or [])
-                    except Exception:  # noqa: BLE001
-                        pass
-                    break
-                cur = _os.path.dirname(cur)
-            if cands:
-                break
-
-        # 只要纯数字的（astrbot 这种用户名形态的构造不出 umo）
-        return [str(x) for x in cands if _re.fullmatch(r"\d{5,12}", str(x))]
 
     @filter.on_decorating_result()
     async def clean_outgoing_markers(self, event: AstrMessageEvent):
@@ -2761,7 +2739,6 @@ class SeerExpertPlugin(Star):
                     "  titles=\"星光之旅,神话\"\n"
                     "  eyes=\"漫游者-AH,漫游者-AS\"")
         return (chr(10) + chr(10) + chr(10)).join(blocks)
-
 
 
     @llm_tool(name="seer_dev_reply")
