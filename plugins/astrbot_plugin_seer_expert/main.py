@@ -2449,6 +2449,57 @@ class SeerExpertPlugin(Star):
                     "  eyes=\"漫游者-AH,漫游者-AS\"")
         return (chr(10) + chr(10) + chr(10)).join(blocks)
 
+
+    @llm_tool(name="seer_dev_note")
+    async def seer_dev_note(self, event: AstrMessageEvent) -> str:
+        """读「开发留言板」—— 维护这个插件的另一边会往里面写待验证的改动。
+
+        # 什么时候用
+        群主/管理员说「看留言」「看看有没有新的」「读一下开发留言」时用它。
+        群里普通聊天**不要主动调** —— 那里面是给维护者看的测试清单。
+
+        # 里面是什么
+        一个 markdown 文件，通常是：
+          · 刚改了什么、为什么改
+          · 要验证哪几条、期望输出长什么样
+          · 已知问题 / 暂时不处理的
+
+        # 注意
+        这是**只读**的，改不了。有意见就在群里说，维护那边会看到。
+        """
+        import os as _os
+
+        # 留言板放在 plugin_data 里，和 kb.sqlite 同级
+        try:
+            base = _os.path.dirname(_os.path.abspath(self.kb._kb_path))  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            base = _os.path.join(_os.path.dirname(_os.path.dirname(
+                _os.path.abspath(__file__))), "plugin_data", "astrbot_plugin_seer_expert")
+
+        for cand in (
+            _os.path.join(base, "_dev_note.md"),
+            _os.path.join(_os.path.dirname(base), "plugin_data",
+                          "astrbot_plugin_seer_expert", "_dev_note.md"),
+        ):
+            if _os.path.isfile(cand):
+                try:
+                    txt = io.open(cand, encoding="utf-8", errors="replace").read().strip()
+                except OSError as exc:
+                    return f"留言板读不了：{exc}"
+                mtime = _os.path.getmtime(cand)
+                import datetime as _dt
+
+                when = _dt.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+                if not txt:
+                    return f"留言板（{when}）现在是空的。"
+                # 太长就截断 —— 留言板是给人看的清单，不需要整篇进上下文
+                if len(txt) > 3000:
+                    txt = txt[:3000] + "\n\n……（后面还有，让维护那边精简一下）"
+                return f"【开发留言板 · {when}】\n\n{txt}"
+
+        return ("留言板还没建。维护那边会在 `plugin_data/astrbot_plugin_seer_expert/"
+                "_dev_note.md` 里写东西。")
+
     @llm_tool(name="seer_read_code")
     async def seer_read_code(self, event: AstrMessageEvent, path: str,
                              pattern: str = "", start: int = 0,
