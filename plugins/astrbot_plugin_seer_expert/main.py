@@ -340,6 +340,21 @@ class SeerExpertPlugin(Star):
 
             # ④ 私聊所有管理员（只发 qq 号形态的，跳过 "astrbot" 这种非号码）
             admins = self._dev_note_admins()
+
+            # ★ 2026-11-17：排除 bot 自己。
+            #   admins_id 里混进了 bot 的号（1000000000），直接发就是「自己给自己发」。
+            #   判断依据：umo_senders 里 sender_name == sender_id（昵称就是号码）的那些，
+            #   典型是机器人的默认昵称；真人不会这么设。
+            try:
+                _self_like = self._dev_note_suspected_self_ids()
+                if _self_like:
+                    _before = list(admins)
+                    admins = [a for a in admins if a not in _self_like]
+                    _dropped = [a for a in _before if a in _self_like]
+                    if _dropped:
+                        logger.debug(f"[赛尔] 重启通知跳过疑似 bot 自己的号: {_dropped}")
+            except Exception as _exc:  # noqa: BLE001
+                logger.debug(f"[赛尔] self_id 探测失败（照常发送）: {_exc}")
             sent = 0
             for qq in admins:
                 umo = f"onebot:FriendMessage:{qq}"
@@ -414,6 +429,51 @@ class SeerExpertPlugin(Star):
 
         # 只要纯数字的（"astrbot" 这种用户名形态构造不出 umo）
         return [str(x) for x in cands if _re.fullmatch(r"\d{5,12}", str(x))]
+
+    def _dev_note_suspected_self_ids(self) -> set[str]:
+        """找出「看起来像 bot 自己」的 QQ 号。
+
+        2026-11-17 加。判断依据：umo_senders 表里 sender_name 与 sender_id 完全相同的记录。
+
+        真人几乎不会把昵称设成自己的一串数字 QQ 号，而机器人默认就是这个状态
+        （QQ 没设置昵称时，昵称回落到号码）。
+
+        查不到就返回空集合 —— 宁可多发一次通知，也不要因为探测失败而全体静默。
+        """
+        import os as _os
+        import sqlite3 as _sqlite3
+
+        out: set[str] = set()
+        try:
+            kb_path = getattr(getattr(self, "kb", None), "_kb_path", None)
+            if not kb_path:
+                return out
+            # 从 kb.sqlite 往上找 data_v4.db（同一层 core/data/）
+            d = _os.path.dirname(_os.path.abspath(str(kb_path)))
+            db_path = None
+            for _ in range(5):
+                cand = _os.path.join(d, "data_v4.db")
+                if _os.path.isfile(cand):
+                    db_path = cand
+                    break
+                d = _os.path.dirname(d)
+            if not db_path:
+                return out
+
+            conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+            try:
+                rows = conn.execute(
+                    "select distinct sender_id from umo_senders "
+                    "where sender_name = sender_id and length(sender_id) between 5 and 12"
+                ).fetchall()
+                for (sid,) in rows:
+                    if sid and str(sid).isdigit():
+                        out.add(str(sid))
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return out
 
         cands = []
         # 依次尝试几个可能的位置
