@@ -269,6 +269,174 @@ class SeerExpertPlugin(Star):
         out = _re.sub(r" {2,}", " ", out)
         return out.strip()
 
+
+    @filter.on_astrbot_loaded()
+    async def notify_dev_note_on_boot(self) -> None:
+        """重启后如果留言板变过，主动私聊管理员说一声。
+
+        2026-11-17 鱼片要的：不用他开口，重启完自己知道。
+
+        和 dev_note_guard 的分工：
+          · dev_note_guard   等「有人说话」才检查（群里/私聊都行）
+          · 这个钩子         重启就检查，一次，不需要任何人说话
+
+        「上次检查到哪一版」记在 plugin_data/_dev_note_seen.json。
+        同一版只通知一次，重启多次也不会重复骚扰。
+        """
+        try:
+            import json as _json
+            import os as _os
+
+            from astrbot.core.message.components import Plain
+            from astrbot.core.message.message_event_result import MessageChain
+
+            # ① 找留言板（和 kb.sqlite 同目录）
+            try:
+                base = _os.path.dirname(_os.path.abspath(self.kb._kb_path))  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                return
+            note = _os.path.join(base, "_dev_note.md")
+            if not _os.path.isfile(note):
+                return
+
+            mtime = _os.path.getmtime(note)
+
+            # ② 读上次记录
+            seen_path = _os.path.join(base, "_dev_note_seen.json")
+            last = 0.0
+            if _os.path.isfile(seen_path):
+                try:
+                    with io.open(seen_path, encoding="utf-8") as f:
+                        last = float(_json.load(f).get("mtime") or 0)
+                except Exception:  # noqa: BLE001
+                    last = 0.0
+
+            if mtime <= last:
+                # 留言板没变过，不打扰
+                return
+
+            # ③ 读内容，数一下有没有需要它验的东西
+            try:
+                with io.open(note, encoding="utf-8", errors="replace") as f:
+                    text = f.read()
+            except OSError:
+                text = ""
+
+            n_bad = text.count("❌")
+            n_todo = text.count("待验证") + text.count("请重测") + text.count("要验")
+            n_total = len(text)
+
+            import datetime as _dt
+
+            when = _dt.datetime.fromtimestamp(mtime).strftime("%m-%d %H:%M")
+            bits = [f"【重启自检】留言板更新了（{when}）"]
+            if n_bad:
+                bits.append(f"里面还有 {n_bad} 条 ❌ 待修")
+            if n_todo:
+                bits.append(f"{n_todo} 处写了「待验证」")
+            if n_bad == 0 and n_todo == 0:
+                bits.append("这版看起来没有 ❌ 标记")
+            msg = "，".join(bits) + "。我这就去看清单。\n\n（不用回，纯通知）"
+
+            # ④ 私聊所有管理员（只发 qq 号形态的，跳过 "astrbot" 这种非号码）
+            admins = self._dev_note_admins()
+            sent = 0
+            for qq in admins:
+                umo = f"onebot:FriendMessage:{qq}"
+                try:
+                    await self.context.send_message(umo, MessageChain([Plain(msg)]))
+                    sent += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"[赛尔] 重启通知发不到 {umo}: {exc}")
+
+            # ⑤ 记下这次看到的版本（哪怕一条没发出去也记，避免每次重启都重试）
+            try:
+                tmp = seen_path + ".tmp"
+                with io.open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                    f.write(_json.dumps({"mtime": mtime, "when": when}, ensure_ascii=False))
+                _os.replace(tmp, seen_path)
+            except OSError:
+                pass
+
+            logger.info(f"[赛尔] 重启自检：留言板更新于 {when}，已通知 {sent} 个管理员")
+
+        except Exception as exc:  # noqa: BLE001
+            # 这是锦上添花的功能，任何异常都不能影响正常启动
+            logger.debug(f"[赛尔] 重启自检失败（不影响运行）：{exc}")
+
+    def _dev_note_admins(self) -> list[str]:
+        """从 AstrBot 主配置里取管理员 QQ 号（只要纯数字的）。
+
+        2026-11-17 修：原来用 __file__ 往上找，但 __file__ 指向的是**工作区**
+        的插件副本，不是实例目录，所以永远找不到 cmd_config.json。
+        改成从 self.kb._kb_path 推 —— 那个路径是运行时真正读到的库，
+        往上一层层拼得到 cmd_config.json，这条路不会错（坑 24 的老办法）。
+        """
+        import json as _json
+        import os as _os
+        import re as _re
+
+        cands: list[str] = []
+
+        # ① 已知能读到的 kb.sqlite → 上溯到 core/data/ → cmd_config.json
+        kb_path = None
+        try:
+            kb_path = getattr(getattr(self, "kb", None), "_kb_path", None)
+        except Exception:  # noqa: BLE001
+            kb_path = None
+
+        tries = []
+        if kb_path:
+            # .../core/data/plugin_data/<插件>/kb.sqlite
+            d = _os.path.dirname(_os.path.abspath(str(kb_path)))
+            for _ in range(5):
+                tries.append(_os.path.join(d, "cmd_config.json"))
+                d = _os.path.dirname(d)
+
+        # ② 环境变量兜底
+        env_inst = _os.environ.get("ASTRBOT_INSTANCE") or _os.environ.get("ASTRBOT_ROOT")
+        if env_inst:
+            tries.append(_os.path.join(env_inst, "core", "data", "cmd_config.json"))
+            tries.append(_os.path.join(env_inst, "data", "cmd_config.json"))
+
+        for p in tries:
+            if not _os.path.isfile(p):
+                continue
+            try:
+                with io.open(p, encoding="utf-8-sig") as f:
+                    d2 = _json.load(f)
+                cands = list(d2.get("admins_id") or [])
+                if cands:
+                    logger.debug(f"[赛尔] 管理员列表来自 {p}: {cands}")
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+
+        # 只要纯数字的（"astrbot" 这种用户名形态构造不出 umo）
+        return [str(x) for x in cands if _re.fullmatch(r"\d{5,12}", str(x))]
+
+        cands = []
+        # 依次尝试几个可能的位置
+        for rel in ("core/data/cmd_config.json", "data/cmd_config.json"):
+            # 从插件目录往上找实例根
+            cur = _os.path.dirname(_os.path.abspath(__file__))
+            for _ in range(6):
+                p = _os.path.join(cur, rel)
+                if _os.path.isfile(p):
+                    try:
+                        with io.open(p, encoding="utf-8-sig") as f:
+                            d = _json.load(f)
+                        cands = list(d.get("admins_id") or [])
+                    except Exception:  # noqa: BLE001
+                        pass
+                    break
+                cur = _os.path.dirname(cur)
+            if cands:
+                break
+
+        # 只要纯数字的（astrbot 这种用户名形态的构造不出 umo）
+        return [str(x) for x in cands if _re.fullmatch(r"\d{5,12}", str(x))]
+
     @filter.on_decorating_result()
     async def clean_outgoing_markers(self, event: AstrMessageEvent):
         """发送前清洗文本，避免群友看到 &sleep& / CQ 码这种东西。"""
