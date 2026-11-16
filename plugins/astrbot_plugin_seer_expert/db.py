@@ -7853,9 +7853,27 @@ class SeerKnowledge:
         if not kw:
             return []
 
-        # ⓪ 简称 → 全名，两级：
-        #   ① complete_mint_series —— 处理「系列+方向」（九天体 / 圣战攻 / v8体）
-        #   ② lookup_mintmark      —— 处理单只别名（青龙 / 梅花）和精确名
+        names = self._mint_resolve_names(kw, style)
+
+        conn = self._open_manual("mintmark")
+        if conn is None:
+            return []
+        try:
+            rows = self._mint_query_chain(conn, kw, names, limit, style)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        return self._mint_build_output(rows, limit)
+
+    def _mint_resolve_names(self, kw: str, style: str = "") -> list[str]:
+        """把关键词解析成候选全名列表（简称/系列/方向 → 实际存的名字）。
+
+        2026-11-16 从 mintmark_manual_search 里抽出来的 —— 原来那方法 386 行，
+        文件里最大。逻辑一行没改，只是搬到独立方法，好单独读、单独测。
+        """
         names = [kw]
         try:
             # style="" → 单查刻印没有精灵上下文，统一先给物攻版（行为可预期），
@@ -7876,323 +7894,347 @@ class SeerKnowledge:
         except Exception:  # noqa: BLE001
             pass
 
-        conn = self._open_manual("mintmark")
-        if conn is None:
-            return []
-        rows = []
-        try:
-            cur = conn.cursor()
-            # ⓪-a 几角筛选（2026-11-09 加，P7）
-            #
-            #   玩家说「五角/四角/三角/二角」= 这颗刻印给了六项里的几项。
-            #   之前 bot 完全没有这个概念，问「五角刻印」直接返回 0 条，
-            #   而 CLI 的 mint_picker 早就有（corner 字段 + --corner 参数）。
-            #   这里补上：关键词命中角数词就全表筛一遍。
-            #
-            #   ⚠ 返回条数由 limit 控制，五角刻印上千条，调用方要自己截。
-            _CW = {"六角": 6, "五角": 5, "四角": 4, "三角": 3,
-                   "二角": 2, "两角": 2, "一角": 1}
-            _cw = None
-            for _w, _n in _CW.items():
-                if _w in kw:
-                    _cw = _n
-                    break
-            if _cw is not None and not rows:
-                try:
-                    _allr = cur.execute(
-                        "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
-                        "FROM MintMark"
-                    ).fetchall()
-                    def _nz(r):
-                        # ★ 2026-11-09：MaxAttriValue 为空的老式小刻印
-                        #   （微型攻击刻印 / 小型防御刻印…，共 1049 条）
-                        #   会算成「0 角」，其实它们是**一角**（只给一项）。
-                        #   MaxAttriValue 空时退回 AttriValue。
-                        v = self._parse_attr_arr(r[2])
-                        if not any(v):
-                            v = self._parse_attr_arr(r[7])
-                        return v
-                    #   ★ 2026-11-09（鱼片指出）：**只对全能刻印算几角**。
-                    #     Type=0 是老版「能力刻印」（微型攻击刻印那种，不用升级就有数值）
-                    #     Type=1/4 是「技能刻印」（撞击刻印那种，给某个技能加效果）
-                    #     两类都不是全能刻印，谈几角会污染结果。
-                    rows = [r for r in _allr
-                            if r[8] == 3 and sum(1 for x in _nz(r) if x) == _cw]
-                    rows.sort(key=lambda r: -sum(_nz(r)))
-                except Exception:  # noqa: BLE001
-                    pass
-            # ⓪ 系列别名（2026-11-08）
-            #
-            #   玩家按「联动作品」叫系列，官方按「图案/主题」命名，名字对不上：
-            #     奥特曼联动 → 官方「光与暗系列」（class 85）
-            #     铁甲小宝联动 → 卡布达专属刻印（不属于任何系列）
-            #
-            #   ★ 别名一律读 aliases overlay 的 mintmark_class_aliases 表，
-            #     **不要在代码里硬编码**（我第一版写了 MINT_CLASS_ALIAS 常量，
-            #     那样加新联动就得改代码，而且实例里跑的和工作区两份会漂）。
-            #   加别名：往 overlay 的 mintmark_class_aliases 插 (外号, class_id)。
-            #
-            #   ★ 只在**精确等于某个系列别名**时生效 —— 带方向词的（奥特曼攻）
-            #     走 ④ 那条分支，那里会先拆方向再映射。
-            if not rows:
-                try:
-                    _alias_cid = None
-                    for (_cid,) in self._alias_q(
-                        "select target_id from mintmark_class_aliases where name=?", (kw,)
-                    ):
-                        _alias_cid = int(_cid)
-                        break
-                    if _alias_cid:
-                        rows = cur.execute(
-                            "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
-                            "FROM MintMark WHERE MintmarkClass = ? ORDER BY ID LIMIT ?",
-                            (_alias_cid, int(limit) * 4),
-                        ).fetchall()
-                except Exception:  # noqa: BLE001
-                    pass
-            # ⓪-b 系列名直接命中（2026-11-08）
-            #
-            #   ★ 必须排在 ① 名字匹配之前。反例：「和平星」——
-            #     名字 LIKE '%和平星%' 本来能命中 13 条（和平星-双鱼座/白羊座/…），
-            #     但上游 lookup_mintmark 的模糊匹配会先把「和平星」解析成
-            #     「和平星-双鱼座」塞进 names 第一位，于是只精确命中 1 条。
-            #     系列名是**集合**语义，比单条名优先。
-            if not rows:
-                try:
-                    _cid0 = cur.execute(
-                        "select ID from MintMarkClass where ClassName like ? limit 1",
-                        (f"%{kw}%",),
-                    ).fetchone()
-                    if _cid0:
-                        rows = cur.execute(
-                            "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
-                            "FROM MintMark WHERE MintmarkClass = ? ORDER BY ID LIMIT ?",
-                            (_cid0[0], int(limit) * 4),
-                        ).fetchall()
-                except Exception:  # noqa: BLE001
-                    pass
-            # ⓪-c 「系列别名 + 方向词」（2026-11-08）
-            #
-            #   实例：「卡布达攻」—— 卡布达是铁甲小宝联动主角，玩家用它代指
-            #   **整个和平星系列**（13 条），方向词再筛攻最高的。
-            #
-            #   ★ 必须排在 ① 名字匹配之前：否则 lookup_mintmark("卡布达攻")
-            #     会先命中「卡布达超级形态专属全能刻印」塞进 names，
-            #     ① 就只返回那一条专属印了。
-            if not rows:
-                _DIRS = (("特攻", 2), ("物攻", 0), ("主攻", -1),
-                         ("攻", -1), ("体", 5), ("速", 4), ("防", 1), ("特防", 3))
-                for _w, _ix in _DIRS:
-                    if not (kw.endswith(_w) and len(kw) > len(_w)):
-                        continue
-                    _h = kw[: -len(_w)]
-                    # ★ 只查**别名表**（玩家外号：卡布达/铁甲小宝/奥特曼），
-                    #   **不查 ClassName**。
-                    #   原因：官方系列名（九天/圣战/和平星）有自己的处理路径 ——
-                    #     「九天攻」→ 单条 九曲之刃（配装只能选一个）
-                    #     「和平星攻」→ ④ 的名字片段匹配本来就能全中 13 条
-                    #   这里要是把 ClassName 也算进来，「九天攻」会被升级成
-                    #   整个九天系列 8 条，等于把配装场景搞坏了。
-                    _cid5 = None
-                    try:
-                        for (_c6,) in self._alias_q(
-                            "select target_id from mintmark_class_aliases where name=?", (_h,)
-                        ):
-                            _cid5 = int(_c6)
-                            break
-                    except Exception:  # noqa: BLE001
-                        pass
-                    if _cid5:
-                        _cand5 = cur.execute(
-                            "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
-                            "FROM MintMark WHERE MintmarkClass = ? LIMIT 60",
-                            (_cid5,),
-                        ).fetchall()
-                        # ★ 2026-11-08：有 style 时**先按流派筛一遍再排序**。
-                        #   不筛的后果（实测）：光与暗系列「奥特曼攻」
-                        #   物攻向也拿到「大地神迹」(攻0/特攻72)，
-                        #   因为按 max(atk,sp_atk) 排序时它和「辉光永恒」(攻72) 并列、
-                        #   取了排前面的那个。特攻版把物攻版的位置抢了。
-                        if _cand5 and style:
-                            _want_atk = style != "special"
+        return names
 
-                            def _keep(_r):
-                                _m = self._parse_attr_arr(_r[2])
-                                _a = _m[0] if len(_m) > 0 else 0
-                                _sa = _m[2] if len(_m) > 2 else 0
-                                return (_a > 0 and _sa == 0) if _want_atk else (_sa > 0 and _a == 0)
-                            _filtered = [r for r in _cand5 if _keep(r)]
-                            if _filtered:
-                                _cand5 = _filtered
-                        if _cand5:
-                            def _dv(_r):
-                                _m = self._parse_attr_arr(_r[2])
-                                if _ix == -1:
-                                    return max(_m[0] if len(_m) > 0 else 0,
-                                               _m[2] if len(_m) > 2 else 0)
-                                return _m[_ix] if len(_m) > _ix else 0
-                            rows = sorted(_cand5, key=_dv, reverse=True)
+    def _mint_query_chain(self, conn, kw: str, names: list[str],
+                          limit: int, style: str = "") -> list:
+        """兜底查询链：按优先级依次尝试，谁先命中用谁。
+
+        顺序（每步都是 `if not rows:` 才进下一个）：
+          ⓪-a 角数筛选（五角/四角/三角/二角）
+          ⓪    系列别名（奥特曼联动 → 光与暗系列）
+          ⓪-b  系列名直接命中（和平星）
+          ⓪-c  系列别名 + 方向词（卡布达攻）
+          ①    名字匹配 · ② 模糊 · …
+
+        ★ 顺序不能乱 —— 每个分支的注释里都写了反例（比如「和平星」
+          如果排在名字匹配后面，会被上游模糊匹配截成 1 条）。
+        ★ conn 由调用方开、调用方关，这里不碰 close。
+        """
+        rows = []          # ★ 原来在主方法的 try 外面，拆出来要带进来
+        cur = conn.cursor()
+        # ⓪-a 几角筛选（2026-11-09 加，P7）
+        #
+        #   玩家说「五角/四角/三角/二角」= 这颗刻印给了六项里的几项。
+        #   之前 bot 完全没有这个概念，问「五角刻印」直接返回 0 条，
+        #   而 CLI 的 mint_picker 早就有（corner 字段 + --corner 参数）。
+        #   这里补上：关键词命中角数词就全表筛一遍。
+        #
+        #   ⚠ 返回条数由 limit 控制，五角刻印上千条，调用方要自己截。
+        _CW = {"六角": 6, "五角": 5, "四角": 4, "三角": 3,
+               "二角": 2, "两角": 2, "一角": 1}
+        _cw = None
+        for _w, _n in _CW.items():
+            if _w in kw:
+                _cw = _n
+                break
+        if _cw is not None and not rows:
+            try:
+                _allr = cur.execute(
+                    "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
+                    "FROM MintMark"
+                ).fetchall()
+                def _nz(r):
+                    # ★ 2026-11-09：MaxAttriValue 为空的老式小刻印
+                    #   （微型攻击刻印 / 小型防御刻印…，共 1049 条）
+                    #   会算成「0 角」，其实它们是**一角**（只给一项）。
+                    #   MaxAttriValue 空时退回 AttriValue。
+                    v = self._parse_attr_arr(r[2])
+                    if not any(v):
+                        v = self._parse_attr_arr(r[7])
+                    return v
+                #   ★ 2026-11-09（鱼片指出）：**只对全能刻印算几角**。
+                #     Type=0 是老版「能力刻印」（微型攻击刻印那种，不用升级就有数值）
+                #     Type=1/4 是「技能刻印」（撞击刻印那种，给某个技能加效果）
+                #     两类都不是全能刻印，谈几角会污染结果。
+                rows = [r for r in _allr
+                        if r[8] == 3 and sum(1 for x in _nz(r) if x) == _cw]
+                rows.sort(key=lambda r: -sum(_nz(r)))
+            except Exception:  # noqa: BLE001
+                pass
+        # ⓪ 系列别名（2026-11-08）
+        #
+        #   玩家按「联动作品」叫系列，官方按「图案/主题」命名，名字对不上：
+        #     奥特曼联动 → 官方「光与暗系列」（class 85）
+        #     铁甲小宝联动 → 卡布达专属刻印（不属于任何系列）
+        #
+        #   ★ 别名一律读 aliases overlay 的 mintmark_class_aliases 表，
+        #     **不要在代码里硬编码**（我第一版写了 MINT_CLASS_ALIAS 常量，
+        #     那样加新联动就得改代码，而且实例里跑的和工作区两份会漂）。
+        #   加别名：往 overlay 的 mintmark_class_aliases 插 (外号, class_id)。
+        #
+        #   ★ 只在**精确等于某个系列别名**时生效 —— 带方向词的（奥特曼攻）
+        #     走 ④ 那条分支，那里会先拆方向再映射。
+        if not rows:
+            try:
+                _alias_cid = None
+                for (_cid,) in self._alias_q(
+                    "select target_id from mintmark_class_aliases where name=?", (kw,)
+                ):
+                    _alias_cid = int(_cid)
                     break
-            # ① 按候选名逐个 LIKE（先全名后原名）
-            if not rows:
-                for nm in names:
+                if _alias_cid:
                     rows = cur.execute(
                         "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
-                        "FROM MintMark WHERE Des LIKE ? LIMIT ?",
-                        (f"%{nm}%", int(limit) * 4),
+                        "FROM MintMark WHERE MintmarkClass = ? ORDER BY ID LIMIT ?",
+                        (_alias_cid, int(limit) * 4),
                     ).fetchall()
-                    if rows:
-                        break
-            # ② 归一化兜底（去「之/的/专属/全能」等虚词后全表比对）
-            if not rows:
-                for nm in names:
-                    nkw = self._mint_norm(nm)
-                    if not nkw:
-                        continue
-                    for r in cur.execute(
-                        "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity FROM MintMark"
-                    ):
-                        nn = self._mint_norm(r[0])
-                        if nn == nkw or nkw in nn:
-                            rows.append(r)
-                            if len(rows) >= int(limit) * 4:
-                                break
-                    if rows:
-                        break
-            # ③ 系列名兜底（2026-11-08 加）
-            #
-            #    刻印名通常**不含系列名**，所以按名字 LIKE 永远查不到：
-            #      光与暗系列（class 85）的 6 条成员叫
-            #      大地神迹 / 辉光永恒 / 深渊瞥视 / 恶念缚魂 / 超限审判 / 时空秩守
-            #      → 按「光与暗」搜名字必然 0 条，bot 只能回「查不到」。
-            #    但手册 MintMarkClass 表里明明有这个系列，MintMark.MintmarkClass 也
-            #    指向它。所以最后一环直接按系列名反查成员。
-            #
-            #    另注：奥特曼那 3 条（迪迦/赛罗/贝利亚专属）的 MintmarkClass = 0，
-            #    它们**不属于任何系列**，只能按「奥特曼」搜名字命中，别指望系列查法。
-            if not rows:
+            except Exception:  # noqa: BLE001
+                pass
+        # ⓪-b 系列名直接命中（2026-11-08）
+        #
+        #   ★ 必须排在 ① 名字匹配之前。反例：「和平星」——
+        #     名字 LIKE '%和平星%' 本来能命中 13 条（和平星-双鱼座/白羊座/…），
+        #     但上游 lookup_mintmark 的模糊匹配会先把「和平星」解析成
+        #     「和平星-双鱼座」塞进 names 第一位，于是只精确命中 1 条。
+        #     系列名是**集合**语义，比单条名优先。
+        if not rows:
+            try:
+                _cid0 = cur.execute(
+                    "select ID from MintMarkClass where ClassName like ? limit 1",
+                    (f"%{kw}%",),
+                ).fetchone()
+                if _cid0:
+                    rows = cur.execute(
+                        "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
+                        "FROM MintMark WHERE MintmarkClass = ? ORDER BY ID LIMIT ?",
+                        (_cid0[0], int(limit) * 4),
+                    ).fetchall()
+            except Exception:  # noqa: BLE001
+                pass
+        # ⓪-c 「系列别名 + 方向词」（2026-11-08）
+        #
+        #   实例：「卡布达攻」—— 卡布达是铁甲小宝联动主角，玩家用它代指
+        #   **整个和平星系列**（13 条），方向词再筛攻最高的。
+        #
+        #   ★ 必须排在 ① 名字匹配之前：否则 lookup_mintmark("卡布达攻")
+        #     会先命中「卡布达超级形态专属全能刻印」塞进 names，
+        #     ① 就只返回那一条专属印了。
+        if not rows:
+            _DIRS = (("特攻", 2), ("物攻", 0), ("主攻", -1),
+                     ("攻", -1), ("体", 5), ("速", 4), ("防", 1), ("特防", 3))
+            for _w, _ix in _DIRS:
+                if not (kw.endswith(_w) and len(kw) > len(_w)):
+                    continue
+                _h = kw[: -len(_w)]
+                # ★ 只查**别名表**（玩家外号：卡布达/铁甲小宝/奥特曼），
+                #   **不查 ClassName**。
+                #   原因：官方系列名（九天/圣战/和平星）有自己的处理路径 ——
+                #     「九天攻」→ 单条 九曲之刃（配装只能选一个）
+                #     「和平星攻」→ ④ 的名字片段匹配本来就能全中 13 条
+                #   这里要是把 ClassName 也算进来，「九天攻」会被升级成
+                #   整个九天系列 8 条，等于把配装场景搞坏了。
+                _cid5 = None
                 try:
-                    # 外号映射已在 ⓪ 处理过（精确匹配），这里就是原词
-                    _cls_kw = kw
-                    cid = cur.execute(
-                        "select ID from MintMarkClass where ClassName like ? limit 1",
-                        (f"%{_cls_kw}%",),
-                    ).fetchone()
-                    if cid:
-                        rows = cur.execute(
-                            "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
-                            "FROM MintMark WHERE MintmarkClass = ? ORDER BY ID LIMIT ?",
-                            (cid[0], int(limit) * 4),
-                        ).fetchall()
+                    for (_c6,) in self._alias_q(
+                        "select target_id from mintmark_class_aliases where name=?", (_h,)
+                    ):
+                        _cid5 = int(_c6)
+                        break
                 except Exception:  # noqa: BLE001
                     pass
-            # ④ 「名字片段 + 方向词」兜底（2026-11-08 加）
-            #
-            #    实例：「奥特曼攻」—— 3 个奥特曼刻印（迪迦/赛罗/贝利亚专属）
-            #    的 MintmarkClass 全是 0（不属于任何系列），③ 系列兜底也无效；
-            #    但按名字 LIKE '%奥特曼%' 能命中 3 条，再用「攻」按主攻项挑最高的。
-            #
-            #    方向词按长度优先匹配（「特攻」必须先于「攻」），避免把「特攻」
-            #    吃成「攻」。索引对应 MaxAttriValue 六项：atk,def,sp_atk,sp_def,spd,hp
-            if not rows:
-                _DIR_TAIL = (
-                    ("特攻", 2), ("物攻", 0), ("主攻", -1),
-                    ("攻", -1), ("体", 5), ("速", 4), ("防", 1), ("特防", 3),
-                )
-                for _word, _idx in _DIR_TAIL:
-                    if not (kw.endswith(_word) and len(kw) > len(_word)):
-                        continue
-                    _head = kw[: -len(_word)]
-                    # ★ head 先查「系列别名」（overlay 的 mintmark_class_aliases）：
-                    #   玩家说「奥特曼攻」，官方系列叫「光与暗系列」、成员名里也不含
-                    #   「奥特曼」，直接按名字搜只会命中迪迦/赛罗/贝利亚那 3 条专属印
-                    #   （玩家根本不考虑它们）。
-                    _alias_cid2 = None
-                    try:
-                        for (_cid4,) in self._alias_q(
-                            "select target_id from mintmark_class_aliases where name=?",
-                            (_head,),
-                        ):
-                            _alias_cid2 = int(_cid4)
-                            break
-                    except Exception:  # noqa: BLE001
-                        pass
-                    _cand = []
-                    if _alias_cid2:
-                        _cand = cur.execute(
-                            "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
-                            "FROM MintMark WHERE MintmarkClass = ? LIMIT 60",
-                            (_alias_cid2,),
-                        ).fetchall()
-                    # ① 系列名（奥特曼→光与暗 / 君子→四君子）
-                    if not _cand:
-                        try:
-                            _cid3 = cur.execute(
-                                "select ID from MintMarkClass where ClassName like ? limit 1",
-                                (f"%{_head}%",),
-                            ).fetchone()
-                            if _cid3:
-                                _cand = cur.execute(
-                                    "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
-                                    "FROM MintMark WHERE MintmarkClass = ? LIMIT 60",
-                                    (_cid3[0],),
-                                ).fetchall()
-                        except Exception:  # noqa: BLE001
-                            _cand = []
-                    # ② 系列没命中，再按名字片段
-                    if not _cand:
-                        _cand = cur.execute(
-                            "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
-                            "FROM MintMark WHERE Des LIKE ? LIMIT 60",
-                            (f"%{_head}%",),
-                        ).fetchall()
-                    if _cand:
-                        def _dir_val(_r):
-                            _mx = self._parse_attr_arr(_r[2])
-                            if _idx == -1:      # 「攻」= 主攻项（物攻/特攻取大）
-                                return max(_mx[0] if len(_mx) > 0 else 0,
-                                           _mx[2] if len(_mx) > 2 else 0)
-                            return _mx[_idx] if len(_mx) > _idx else 0
-                        _cand = sorted(_cand, key=_dir_val, reverse=True)
-                        rows = _cand
-                    break
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+                if _cid5:
+                    _cand5 = cur.execute(
+                        "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
+                        "FROM MintMark WHERE MintmarkClass = ? LIMIT 60",
+                        (_cid5,),
+                    ).fetchall()
+                    # ★ 2026-11-08：有 style 时**先按流派筛一遍再排序**。
+                    #   不筛的后果（实测）：光与暗系列「奥特曼攻」
+                    #   物攻向也拿到「大地神迹」(攻0/特攻72)，
+                    #   因为按 max(atk,sp_atk) 排序时它和「辉光永恒」(攻72) 并列、
+                    #   取了排前面的那个。特攻版把物攻版的位置抢了。
+                    if _cand5 and style:
+                        _want_atk = style != "special"
 
+                        def _keep(_r):
+                            _m = self._parse_attr_arr(_r[2])
+                            _a = _m[0] if len(_m) > 0 else 0
+                            _sa = _m[2] if len(_m) > 2 else 0
+                            return (_a > 0 and _sa == 0) if _want_atk else (_sa > 0 and _a == 0)
+                        _filtered = [r for r in _cand5 if _keep(r)]
+                        if _filtered:
+                            _cand5 = _filtered
+                    if _cand5:
+                        def _dv(_r):
+                            _m = self._parse_attr_arr(_r[2])
+                            if _ix == -1:
+                                return max(_m[0] if len(_m) > 0 else 0,
+                                           _m[2] if len(_m) > 2 else 0)
+                            return _m[_ix] if len(_m) > _ix else 0
+                        rows = sorted(_cand5, key=_dv, reverse=True)
+                break
+        # ① 按候选名逐个 LIKE（先全名后原名）
+        if not rows:
+            for nm in names:
+                rows = cur.execute(
+                    "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
+                    "FROM MintMark WHERE Des LIKE ? LIMIT ?",
+                    (f"%{nm}%", int(limit) * 4),
+                ).fetchall()
+                if rows:
+                    break
+        # ② 归一化兜底（去「之/的/专属/全能」等虚词后全表比对）
+        if not rows:
+            for nm in names:
+                nkw = self._mint_norm(nm)
+                if not nkw:
+                    continue
+                for r in cur.execute(
+                    "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity FROM MintMark"
+                ):
+                    nn = self._mint_norm(r[0])
+                    if nn == nkw or nkw in nn:
+                        rows.append(r)
+                        if len(rows) >= int(limit) * 4:
+                            break
+                if rows:
+                    break
+        # ③ 系列名兜底（2026-11-08 加）
+        #
+        #    刻印名通常**不含系列名**，所以按名字 LIKE 永远查不到：
+        #      光与暗系列（class 85）的 6 条成员叫
+        #      大地神迹 / 辉光永恒 / 深渊瞥视 / 恶念缚魂 / 超限审判 / 时空秩守
+        #      → 按「光与暗」搜名字必然 0 条，bot 只能回「查不到」。
+        #    但手册 MintMarkClass 表里明明有这个系列，MintMark.MintmarkClass 也
+        #    指向它。所以最后一环直接按系列名反查成员。
+        #
+        #    另注：奥特曼那 3 条（迪迦/赛罗/贝利亚专属）的 MintmarkClass = 0，
+        #    它们**不属于任何系列**，只能按「奥特曼」搜名字命中，别指望系列查法。
+        if not rows:
+            try:
+                # 外号映射已在 ⓪ 处理过（精确匹配），这里就是原词
+                _cls_kw = kw
+                cid = cur.execute(
+                    "select ID from MintMarkClass where ClassName like ? limit 1",
+                    (f"%{_cls_kw}%",),
+                ).fetchone()
+                if cid:
+                    rows = cur.execute(
+                        "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
+                        "FROM MintMark WHERE MintmarkClass = ? ORDER BY ID LIMIT ?",
+                        (cid[0], int(limit) * 4),
+                    ).fetchall()
+            except Exception:  # noqa: BLE001
+                pass
+        # ④ 「名字片段 + 方向词」兜底（2026-11-08 加）
+        #
+        #    实例：「奥特曼攻」—— 3 个奥特曼刻印（迪迦/赛罗/贝利亚专属）
+        #    的 MintmarkClass 全是 0（不属于任何系列），③ 系列兜底也无效；
+        #    但按名字 LIKE '%奥特曼%' 能命中 3 条，再用「攻」按主攻项挑最高的。
+        #
+        #    方向词按长度优先匹配（「特攻」必须先于「攻」），避免把「特攻」
+        #    吃成「攻」。索引对应 MaxAttriValue 六项：atk,def,sp_atk,sp_def,spd,hp
+        if not rows:
+            _DIR_TAIL = (
+                ("特攻", 2), ("物攻", 0), ("主攻", -1),
+                ("攻", -1), ("体", 5), ("速", 4), ("防", 1), ("特防", 3),
+            )
+            for _word, _idx in _DIR_TAIL:
+                if not (kw.endswith(_word) and len(kw) > len(_word)):
+                    continue
+                _head = kw[: -len(_word)]
+                # ★ head 先查「系列别名」（overlay 的 mintmark_class_aliases）：
+                #   玩家说「奥特曼攻」，官方系列叫「光与暗系列」、成员名里也不含
+                #   「奥特曼」，直接按名字搜只会命中迪迦/赛罗/贝利亚那 3 条专属印
+                #   （玩家根本不考虑它们）。
+                _alias_cid2 = None
+                try:
+                    for (_cid4,) in self._alias_q(
+                        "select target_id from mintmark_class_aliases where name=?",
+                        (_head,),
+                    ):
+                        _alias_cid2 = int(_cid4)
+                        break
+                except Exception:  # noqa: BLE001
+                    pass
+                _cand = []
+                if _alias_cid2:
+                    _cand = cur.execute(
+                        "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
+                        "FROM MintMark WHERE MintmarkClass = ? LIMIT 60",
+                        (_alias_cid2,),
+                    ).fetchall()
+                # ① 系列名（奥特曼→光与暗 / 君子→四君子）
+                if not _cand:
+                    try:
+                        _cid3 = cur.execute(
+                            "select ID from MintMarkClass where ClassName like ? limit 1",
+                            (f"%{_head}%",),
+                        ).fetchone()
+                        if _cid3:
+                            _cand = cur.execute(
+                                "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
+                                "FROM MintMark WHERE MintmarkClass = ? LIMIT 60",
+                                (_cid3[0],),
+                            ).fetchall()
+                    except Exception:  # noqa: BLE001
+                        _cand = []
+                # ② 系列没命中，再按名字片段
+                if not _cand:
+                    _cand = cur.execute(
+                        "SELECT Des, BaseAttriValue, MaxAttriValue, ExtraAttriValue, Hide, Grade, Rarity, AttriValue, Type, EffectDes "
+                        "FROM MintMark WHERE Des LIKE ? LIMIT 60",
+                        (f"%{_head}%",),
+                    ).fetchall()
+                if _cand:
+                    def _dir_val(_r):
+                        _mx = self._parse_attr_arr(_r[2])
+                        if _idx == -1:      # 「攻」= 主攻项（物攻/特攻取大）
+                            return max(_mx[0] if len(_mx) > 0 else 0,
+                                       _mx[2] if len(_mx) > 2 else 0)
+                        return _mx[_idx] if len(_mx) > _idx else 0
+                    _cand = sorted(_cand, key=_dir_val, reverse=True)
+                    rows = _cand
+                break
+        return rows
+
+    def _mint_build_output(self, rows: list, limit: int) -> list[dict]:
+        """rows → 去重 + 构造 dict + 按六项和排序。
+
+        按名字去重：灵籁·伴夏 有 42235 和 45026 两条数值完全一样，
+        查「毛毛」会列两遍，只留先出现的。
+        """
         out = []
         # ★ 2026-11-08 去重：同名字可能有多条 id ——
         #   实例：灵籁·伴夏 有 42235 和 45026 两条、数值完全一样，
         #   查「毛毛」会重复列出两遍。按名字去重，只保留先出现的那条。
         _seen_names: set[str] = set()
+
+        # ★ 2026-11-16：这里原先直接写 r[7] / r[8] / r[9]，但主查询的 SELECT
+        #   只有 7 列（Des, Base, Max, Extra, Hide, Grade, Rarity）——
+        #   只有「多查了几列」的分支才凑得齐，走窄 SELECT 就 IndexError。
+        #   实测触发：查「灵籁伴夏」（精确命中单条，走窄的）。
+        def _f(i: int, default=""):
+            """安全取字段 —— 有些查询分支的 SELECT 列数不够（见下面注释）。"""
+            return r[i] if len(r) > i else default
+
         for r in rows:
             if len(out) >= int(limit):
                 break
-            if r[0] in _seen_names:
+            if _f(0) in _seen_names:
                 continue
-            _seen_names.add(r[0])
-            base = self._parse_attr_arr(r[1])
-            mx = self._parse_attr_arr(r[2])
-            extra = self._parse_attr_arr(r[3])
+            _seen_names.add(_f(0))
+            base = self._parse_attr_arr(_f(1))
+            mx = self._parse_attr_arr(_f(2))
+            extra = self._parse_attr_arr(_f(3))
             # ★ 2026-11-09：MaxAttriValue 为空的老式刻印（初级全能/烈焰纹章/
             #   微型体力刻印这些，共上千条）要退回 AttriValue 取数值，
             #   否则「六角」查出来合计是 0，看着自相矛盾。
             #   这类刻印没有成长空间，AttriValue 就是它的最终值。
             if not any(mx):
-                mx = self._parse_attr_arr(r[7])
+                mx = self._parse_attr_arr(_f(7))
             # MaxAttriValue 已含隐藏值：可见满级 = 满级 - 隐藏
             total_all = sum(mx)
             total_visible = total_all - sum(extra)
             out.append(
                 {
-                    "name": r[0],
+                    "name": _f(0),
                     "base": base,
                     "max": mx,
                     "extra": extra,
-                    "hide": r[4],
-                    "grade": r[5],
+                    "hide": _f(4),
+                    "grade": _f(5),
                     "total": total_visible,
                     "total_with_extra": total_all,
                     # ★ 2026-11-09（P7）：几角 = 六项里有几项有值。
@@ -8206,22 +8248,23 @@ class SeerKnowledge:
                     #     Type=0 → 老版「能力刻印」（不用升级就有数值，不是全能）
                     #     Type=1/4 → 「技能刻印」（给某个技能加效果，没有属性值）
                     #   后两类 corner 一律给 None，免得被误当成「一角 / 零角」。
-                    "corner": (sum(1 for x in mx if x) if r[8] == 3 else None),
-                    "is_universal": r[8] == 3,
+                    "corner": (sum(1 for x in mx if x) if _f(8) == 3 else None),
+                    "is_universal": _f(8) == 3,
                     # ★ 2026-11-09（P7）：刻印大类。玩家口中的「几角」只对全能刻印成立，
                     #   但有几个**名字里带「全能」却不是全能**的老刻印
                     #   （高级全能刻印 / 全国巅峰联赛专属全能刻印 / 王者级均衡刻印…），
                     #   它们是 Type=0 的老版「能力刻印」—— 不用升级就有数值。
                     #   输出时要明说，免得群友按名字误会。
-                    "kind": self._MINT_KIND.get(r[8], ""),
+                    "kind": self._MINT_KIND.get(_f(8), ""),
                     # ★ 2026-11-09：技能刻印（Type=1）的属性值全是 0，
                     #   真正的信息在 EffectDes（「先制+1」「威力+15」「固定伤害+50」）。
                     #   不返回这个字段，查技能刻印等于查了个空壳。
-                    "effect": (r[9] or "").strip() if len(r) > 9 else "",
+                    "effect": str(_f(9) or "").strip(),
                 }
             )
         out.sort(key=lambda x: (-x["total_with_extra"], len(x["name"])))
         return out
+
 
     def mint_paired_version(self, name: str) -> str:
         """找同系列的「成对版」：攻/特攻互换，其余四项完全相同。
