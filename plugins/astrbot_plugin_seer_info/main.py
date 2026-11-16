@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from pathlib import Path
 from functools import partial
@@ -764,9 +765,9 @@ class SeerInfoPlugin(Star):
 
         这样不浪费图片配额，群友也能先知道有哪些选择。
 
-        # 参数
-        pet   精灵名或 ID
-        index 要看第几套（从 1 开始）。0 或不传 = 只列清单不发图。
+        Args:
+            pet(string): 精灵名或 ID。
+            index(number): 想看哪一套（从 1 开始）。0 或不传 = 只列清单不发图。
         """
         if not db_manager.is_database_loaded("seerapi"):
             return "❌ 数据库还没加载完，等一会再问。"
@@ -832,80 +833,6 @@ class SeerInfoPlugin(Star):
         return "\n".join(lines)
 
 
-    async def seer_player_config(self, event: AstrMessageEvent, pet: str) -> str:
-        """查【群友投稿】的精灵配置图 —— 别人已经配好、截图上传到图库的现成方案。
-
-        # 什么时候用
-        群友问「XX 怎么配」「有没有 XX 的配置图」「看看别人怎么配的」
-        「XX 的攻略配置」「抄一下作业」时用它。
-
-        # 和另一个工具的区别（重要，别调错）
-        · seer_player_config（本工具）= 查**群友投稿的截图**，图片是别人配好的
-        · seer_config_card         = **自己按刻印现算**一张配置图
-        群友要「看别人怎么配的」用本工具；要「按我给的刻印算一张」用 seer_config_card。
-
-        # 参数
-        pet: 精灵名或 ID。查不到会说明是没这只精灵、还是这只没有投稿。
-        """
-        if not db_manager.is_database_loaded("seerapi"):
-            return "❌ 数据库还没加载完，等一会再问。"
-
-        handler = self._pet_config_handler
-        name = (pet or "").strip()
-        if not name:
-            return "❌ 要查哪只精灵的配置图？把精灵名告诉我。"
-
-        try:
-            pets, matched = handler._resolve_pets(name)
-        except Exception as exc:  # noqa: BLE001
-            return f"查配置图时出错：{type(exc).__name__}: {exc}"
-        if not pets:
-            return f"库里没有叫「{name}」的精灵，可能名字不对或者还没收录。"
-        if len(pets) > 1:
-            names = "、".join(f"{p.name}({p.id})" for p in pets[:8])
-            return (f"「{name}」匹配到 {len(pets)} 只：{names}"
-                    f"{'…' if len(pets) > 8 else ''}。请让群友报完整名字（或 ID）再查。")
-
-        target = pets[0]
-        try:
-            variants = handler.variants(int(target.id))
-        except Exception as exc:  # noqa: BLE001
-            return f"读配置图目录出错：{type(exc).__name__}: {exc}"
-        if not variants:
-            return (f"【{target.name}】（{target.id}）目前还没有群友投稿的配置图。"
-                    f"想看现算的，可以用 seer_config_card。")
-
-        # 发前 3 张，附上传者信息
-        import astrbot.api.message_components as Comp
-        try:
-            from astrbot.core.message.message_result import MessageChain
-        except Exception:
-            from astrbot.core.message.message_event_result import MessageChain
-
-        sent = 0
-        parts = []
-        for v in variants[:3]:
-            try:
-                chain = MessageChain(chain=[
-                    Comp.Image.fromFileSystem(str(v.image)),
-                    Comp.Plain(handler._caption(target, v, len(variants))),
-                ])
-                await self.context.send_message(event.unified_msg_origin, chain)
-                sent += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[seer_player_config] 第 %s 张发送失败: %s", v.index, exc)
-                parts.append(f"第 {v.index} 套发送失败")
-
-        head = (f"【{target.name}】共 {len(variants)} 套群友投稿的配置图"
-                f"{'，已发前 ' + str(sent) + ' 套' if sent else ''}。")
-        if len(variants) > sent:
-            head += f" 还有 {len(variants) - sent} 套没发（一次最多发 3 套）。"
-        if parts:
-            head += " " + "；".join(parts)
-        return head
-
-
-
     # ═══ 素材发送（2026-11-16 加）═══════════════════════════════════════
     # service.py 里有 12 个 GetImage 实例，各自管一种素材的 CDN 模板。
     # 但原本只有 /刻印 /套装 /部件 /称号 这些命令在用，模型调不到。
@@ -922,29 +849,258 @@ class SeerInfoPlugin(Star):
         "魂印图标": "soulmark", "专属效果图标": "soulmark",
         "buff": "signbuff", "buff图标": "signbuff",
         "道具图标": "item", "道具": "item",
+        # ★ 2026-11-16 补：交接记的「pet_type 表不存在」是表名查错了。
+        #   正确链条：pet.type_id → element_type_combination.id
+        #   → primary_id / secondary_id → element_type.id
+        "属性": "element", "属性图标": "element", "系别": "element",
     }
 
     _LOCAL_ICON_DIRS = {
         "mintmark_icon": "mintmark", "suit": "suit", "equip": "equip",
         "title": "title", "battle_effect": "effect", "soulmark": "soulmark",
+        # ★ 2026-11-16：属性图标有两套本地副本，按顺序找
+        #   element_hd  手册源的 typef/（250~320px，4.1 MB，139 张，就是手机手册那个观感）
+        #   element     游戏 PetType/ 的 40×40 小图（730 KB，兜底）
+        "element": ("element_hd", "element"),
     }
 
+    @staticmethod
+    def _upscale_if_small(data: bytes, min_side: int = 100, to: int = 180) -> bytes:
+        """把「正方形小图标」放大到 to×to，发到 QQ 才不至于糊成一团。
+
+        ★ 2026-11-16 鱼片指出：手机手册上的属性图标比我们发的鲜艳清晰。
+          后来在手册仓库里找到了 `generated_files/plugins/typef/` —— 250~320px 的高清原图，
+          已经全部预存到 `icon_assets/element_hd/`，属性图标从此走高清，不再靠放大凑。
+
+          这个函数现在只对**剩下的**小图生效（魂印 60×60、异常 68×68 等）：
+          只处理 **宽高相等且短边 < min_side** 的图，
+          部件预览是 91×32 这种异形，按正方形放大会被拉变形，一律不动。
+          高清属性图 250px 以上，进不来这个函数。
+        """
+        try:
+            from io import BytesIO
+
+            from PIL import Image, ImageEnhance, ImageFilter
+
+            im = Image.open(BytesIO(data))
+            w, h = im.size
+            if w != h or w >= min_side:
+                return data
+            im = im.convert("RGBA")
+            im = im.resize((to, to), Image.LANCZOS)
+            im = im.filter(ImageFilter.UnsharpMask(radius=2, percent=110, threshold=2))
+            rgb = ImageEnhance.Color(im.convert("RGB")).enhance(1.18)
+            rgb = ImageEnhance.Contrast(rgb).enhance(1.06)
+            im = Image.merge("RGBA", (*rgb.split(), im.split()[3]))
+            buf = BytesIO()
+            im.save(buf, "PNG", optimize=True)
+            return buf.getvalue()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[seer_asset] 放大失败，按原图发: %s", exc)
+            return data
+
     def _local_asset(self, key: str, rid: int) -> bytes | None:
-        """先查本地 icon_assets 目录（2026-11-16 预存了 9171 个图标 / 140.8 MB）。
+        """先查本地 icon_assets 目录（2026-11-16 预存了上万个图标 / 140+ MB）。
 
         有就直接读，没有才联网 —— 图标类素材基本固定，本地能覆盖 99%。
+
+        `_LOCAL_ICON_DIRS` 的值可以是 str，也可以是 tuple —— tuple 表示按顺序试，
+        先命中的赢。目前只有属性图标用多目录（element_hd 高清 → element 小图兜底）。
         """
         sub = self._LOCAL_ICON_DIRS.get(key)
         if not sub:
             return None
-        try:
-            base = os.path.join(self.cfg.data_dir, "icon_assets", sub, f"{rid}.png")
-            if os.path.isfile(base) and os.path.getsize(base) > 200:
-                with open(base, "rb") as f:
-                    return f.read()
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("[seer_asset] 读本地图标失败: %s", exc)
+        dirs = sub if isinstance(sub, (list, tuple)) else (sub,)
+        for d in dirs:
+            try:
+                base = os.path.join(self.cfg.data_dir, "icon_assets", d, f"{rid}.png")
+                if os.path.isfile(base) and os.path.getsize(base) > 200:
+                    with open(base, "rb") as f:
+                        return f.read()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[seer_asset] 读本地图标失败(%s): %s", d, exc)
         return None
+
+    @llm_tool(name="seer_element")
+    async def seer_element(self, event: AstrMessageEvent, target: str = "") -> str:
+        """查属性（系别）的【编号】和基本信息 —— 只出文字，不发图。
+
+        # 什么时候用
+        群友问「神秘的编号是多少」「混沌战斗是几号」「226 是什么属性」
+        「火系克制哪些」「XX 属性有几只精灵」时用它。
+        **要图不要用它**，要图用 seer_asset（kind 填「属性图标」）。
+
+        # 两套编号别搞混（这是最容易答错的地方）
+        · **组合编号**（1~226）：属性图标、精灵的 type_id 都用这一套。
+          单属性时组合号 == 单属性号（草=1、混沌=222）；
+          双属性时是独立编号（神秘轮回=123、混沌战斗=93、光火=68）。
+        · **单属性编号**（26 个）：克制表 elementtyperelationorm 只用这一套。
+        本工具会把两套都列出来，别只报一个数就完事。
+
+        # 注意
+        群友报的数字如果是个精灵编号（比如 4677），会自动换算成那只精灵的属性。
+        结果以库里为准，**不要自己推测没查到的属性**。
+
+        Args:
+            target(string): 属性名、属性组合名（顺序和空格随意，如「神秘轮回」「轮回神秘」）、
+                组合编号，或者精灵名 / 精灵编号。
+        """
+
+        def _squash(s: str) -> str:
+            return re.sub(r"[\s·,，/、・]+", "", str(s))
+
+        from .data import db_manager
+
+        sess = db_manager.get_all_sessions().get("seerapi")
+        if sess is None:
+            return "❌ seerapi 数据库还没加载完，等一会再问。"
+        try:
+            from sqlalchemy import text as _text
+        except Exception:
+            return "❌ sqlalchemy 不可用"
+
+        raw = (target or "").strip()
+        if not raw:
+            names = sess.execute(
+                _text("select name from element_type_combination "
+                      "where secondary_id is null order by id")
+            ).fetchall()
+            return ("要查哪个属性？可以报属性名（" + "、".join(str(n[0]) for n in names)
+                    + "）、属性组合名（如「神秘轮回」），或者编号。")
+
+        # 解析成组合编号（复用 _element_icon_id，它对顺序/空格/数字都做过处理）
+        cid, label, err = self._element_icon_id(raw)
+        if err or cid is None:
+            return err or f"没认出「{raw}」。"
+
+        row = sess.execute(
+            _text("select name, primary_id, secondary_id "
+                  "from element_type_combination where id = :i"),
+            {"i": cid},
+        ).fetchone()
+        if not row:
+            return f"属性组合编号 {cid} 在库里查不到。"
+        cname, p1, p2 = row[0], row[1], row[2]
+
+        etypes = {int(r[0]): str(r[1]) for r in sess.execute(
+            _text("select id, name from element_type")).fetchall()}
+
+        lines = [f"【{cname}】"]
+        lines.append(f"  组合编号：#{cid}")
+        if p2 is None:
+            lines.append(f"  单属性编号：#{int(p1)}（{etypes.get(int(p1), '?')}）")
+        else:
+            lines.append(f"  主属性 {etypes.get(int(p1), '?')}（单属性编号 #{int(p1)}）"
+                         f" · 次属性 {etypes.get(int(p2), '?')}（#{int(p2)}）")
+
+        n_pet = sess.execute(
+            _text("select count(*) from pet where type_id = :t"), {"t": cid}
+        ).fetchone()[0]
+        samples = sess.execute(
+            _text("select name from pet where type_id = :t order by id limit 6"),
+            {"t": cid},
+        ).fetchall()
+        line = f"  该属性的精灵：{n_pet} 只"
+        if samples:
+            line += "（" + "、".join(str(s[0]) for s in samples) + ("…" if n_pet > 6 else "") + "）"
+        lines.append(line)
+
+        # 克制只对单属性有意义（克制表就是 26×26）
+        if p2 is None:
+            sid = int(p1)
+            strong = sess.execute(
+                _text("select target_id, multiple from elementtyperelationorm "
+                      "where source_id = :s and multiple >= 2.0 order by target_id"),
+                {"s": sid},
+            ).fetchall()
+            weak = sess.execute(
+                _text("select source_id, multiple from elementtyperelationorm "
+                      "where target_id = :t and multiple >= 2.0 order by source_id"),
+                {"t": sid},
+            ).fetchall()
+            bad = sess.execute(
+                _text("select target_id, multiple from elementtyperelationorm "
+                      "where source_id = :s and multiple > 0 and multiple < 1.0 "
+                      "order by target_id"),
+                {"s": sid},
+            ).fetchall()
+            fmt = lambda rs, idx: "、".join(  # noqa: E731
+                f"{etypes.get(int(r[idx]), '?')}×{r[1]:g}" for r in rs
+            ) or "无"
+            lines.append(f"  克制：{fmt(strong, 0)}")
+            lines.append(f"  被克：{fmt(weak, 0)}")
+            lines.append(f"  打不动：{fmt(bad, 0)}")
+        else:
+            lines.append("  （克制倍率按主/次属性各自过一遍再相乘，"
+                         "要具体数值可以让我算一次伤害）")
+
+        return chr(10).join(lines)
+
+
+    # 道具图标：id → 子目录（手册 items.db 的 url 字段提取，11899 条 / 217 KB）
+    # 类级缓存，读一次就够；文件不存在也不报错，退回盲试。
+    _item_dir_cache: dict | None = None
+
+    def _item_icon_dir(self, rid: int) -> str:
+        cls = type(self)
+        if cls._item_dir_cache is None:
+            cls._item_dir_cache = {}
+            try:
+                import json
+                p = os.path.join(self.cfg.data_dir, "item_icon_dirs.json")
+                if os.path.isfile(p):
+                    with open(p, encoding="utf-8") as f:
+                        cls._item_dir_cache = json.load(f)
+                    logger.info("[seer_asset] 道具图标目录表已加载 %d 条",
+                                len(cls._item_dir_cache))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[seer_asset] 读 item_icon_dirs.json 失败: %s", exc)
+        return cls._item_dir_cache.get(str(rid), "")
+
+    async def _fetch_item_icon(self, rid: int) -> tuple[bytes | None, str]:
+        """道具图标：先按已知子目录直连（1 次请求），失败再逐个试剩下的。"""
+        import httpx
+
+        base = ("https://cnb.cool/SeerAPI/seer-unity-assets/-/git/raw/main/"
+                "newseer/assets/art/ui/assets/item/{}/icon/{}.png")
+        known = self._item_icon_dir(rid)
+        order = []
+        if known:
+            order.append(known)
+        for s in ("doodle", "cloth", "petitem", "skillstone", "throw", "userinfo", "glasses"):
+            if s not in order:
+                order.append(s)
+
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            for sub in order:
+                try:
+                    r = await client.get(base.format(sub, rid))
+                    if r.status_code == 200 and len(r.content) > 100:
+                        # ★ 2026-11-16：下载成功就落地缓存。
+                        #   之前只 return、不写盘，所以 icon_assets/item/ 一直是空的
+                        #   （item_icon_dirs.json 有 11899 条映射，但一张图都没存），
+                        #   每次请求道具图标都联网，断网就发不出来。
+                        #   按需缓存比全量下 11899 张划算 —— 大部分道具没人问。
+                        self._cache_item_icon(sub, rid, r.content)
+                        return r.content, ("在线·" + sub)
+                except Exception:  # noqa: BLE001
+                    continue
+        return None, ""
+
+    def _cache_item_icon(self, sub: str, rid: int, data: bytes) -> None:
+        """把下载到的道具图标写进 icon_assets/item/{sub}/{rid}.png（失败不影响出图）。"""
+        try:
+            dst_dir = os.path.join(self.cfg.data_dir, "icon_assets", "item", sub)
+            os.makedirs(dst_dir, exist_ok=True)
+            dst = os.path.join(dst_dir, f"{rid}.png")
+            tmp = dst + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, dst)
+            logger.debug("[seer_asset] 道具图标已缓存：item/%s/%s.png（%d 字节）",
+                         sub, rid, len(data))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[seer_asset] 缓存道具图标失败（不影响本次出图）：%s", exc)
 
     def _asset_getter(self, key: str):
         from .service import (
@@ -965,6 +1121,16 @@ class SeerInfoPlugin(Star):
     def _asset_id(self, key: str, target: str) -> tuple[int | None, str]:
         """名字 → id。返回 (id, 错误说明)。"""
         from .data import db_manager
+
+        # ★ 2026-11-16：群友从配置图/列表抄编号时常带「#」，日志实录
+        #   target="#42644" → 「库里没有叫「#42644」的刻印」，去掉 # 就正常。
+        #   所有素材类型统一在入口剥一次，省得每个分支各写一遍。
+        target = str(target or "").strip().lstrip("#").strip()
+        # ★ 2026-11-16：下面 item / table_map 两个分支用的都是 `name`，
+        #   而本方法形参叫 target —— 只有 mintmark 分支单独赋值过，
+        #   所以「道具图标」一调就 UnboundLocalError（赛尔豆发不出来）。
+        #   在入口统一定义一次，所有分支都能用。
+        name = target
 
         # 精灵类：走 _resolve_pets（它已经处理名字回退、多形态）
         if key in ("pet_body", "pet_head"):
@@ -996,8 +1162,91 @@ class SeerInfoPlugin(Star):
         except Exception:
             return None, "sqlalchemy 不可用"
 
+        # 刻印图标：mintmark 表有 94 组同名（「特级全能刻印」7 个、「烈焰纹章」5 个），
+        # 所以不能像 table_map 那样直接 like + 报「匹配多条」——先精确，再退化到模糊。
+        # ★ 2026-11-16 之前这里**根本没有 mintmark 分支**，走到最后直接
+        #   return "不支持的素材类型" —— 所以「刻印图标」这个类型从来没成功过一次。
+        if key == "mintmark_icon":
+            # ★ 2026-11-16 修：本方法形参叫 target，这个分支却写成了 name，
+            #   结果「刻印图标」一调就 NameError —— 从加上这个分支起就没成功过一次。
+            name = target
+            # 群友报编号就能直接拿那一张（上面同名时会先给一串编号）
+            if name.isdigit():
+                try:
+                    row = sess.execute(
+                        _text("select name from mintmark where id = :i"),
+                        {"i": int(name)},
+                    ).fetchone()
+                    if row:
+                        return int(name), ""
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                exact = sess.execute(
+                    _text("select id, name, rarity_id from mintmark where name = :n"),
+                    {"n": name},
+                ).fetchall()
+                if len(exact) == 1:
+                    return int(exact[0][0]), ""
+                if len(exact) > 1:
+                    cands = "、".join(f"#{r[0]}" for r in exact[:8])
+                    tail = "…" if len(exact) > 8 else ""
+                    return None, (f"「{name}」有 {len(exact)} 个同名刻印：{cands}{tail}。"
+                                  f"**它们图标各不相同**（实测 7 个同名就是 7 张不同的图），"
+                                  f"让群友报一个编号，再用那个编号查一次就能拿到对应的图。")
+                rows = sess.execute(
+                    _text("select id, name from mintmark where name like :n limit 6"),
+                    {"n": f"%{name}%"},
+                ).fetchall()
+                if not rows:
+                    return None, f"库里没有叫「{name}」的刻印"
+                if len(rows) > 1:
+                    names = "、".join(f"{r[1]}({r[0]})" for r in rows[:6])
+                    return None, f"「{name}」匹配到多个刻印：{names}。请说得更具体。"
+                return int(rows[0][0]), ""
+            except Exception as exc:  # noqa: BLE001
+                return None, f"查 mintmark 出错：{type(exc).__name__}: {exc}"
+
+        # 道具图标：item 表 12789 条，id 就是图标编号（GetImage 会依次试 6 个子目录）。
+        # ★ 2026-11-16 之前这里**没有 item 分支** ——「道具图标」也是挂了名没实现，
+        #   调用直接落到最后 return「不支持的素材类型」。
+        if key == "item":
+            try:
+                rows = sess.execute(
+                    _text("select id, name from item where name = :n limit 6"),
+                    {"n": name},
+                ).fetchall()
+                if len(rows) == 1:
+                    return int(rows[0][0]), ""
+                if len(rows) > 1:
+                    cands = "、".join(f"{r[1]}({r[0]})" for r in rows[:6])
+                    return None, f"「{name}」匹配到多个道具：{cands}。请说得更具体。"
+                rows = sess.execute(
+                    _text("select id, name from item where name like :n limit 6"),
+                    {"n": f"%{name}%"},
+                ).fetchall()
+                if not rows:
+                    return None, f"库里没有叫「{name}」的道具"
+                if len(rows) > 1:
+                    cands = "、".join(f"{r[1]}({r[0]})" for r in rows[:6])
+                    return None, f"「{name}」匹配到多个道具：{cands}。请说得更具体。"
+                return int(rows[0][0]), ""
+            except Exception as exc:  # noqa: BLE001
+                return None, f"查 item 出错：{type(exc).__name__}: {exc}"
+
         if key in table_map:
             tbl, name_col, id_col = table_map[key]
+            # 纯数字 → 当主键直接查（同名候选报过编号之后，群友会用编号回来）
+            if name.isdigit():
+                try:
+                    row = sess.execute(
+                        _text(f"select {name_col} from {tbl} where {id_col} = :i"),
+                        {"i": int(name)},
+                    ).fetchone()
+                    if row:
+                        return int(name), ""
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 rows = sess.execute(
                     _text(f"select {id_col}, {name_col} from {tbl} "
@@ -1033,20 +1282,173 @@ class SeerInfoPlugin(Star):
             except Exception as exc:  # noqa: BLE001
                 return None, f"查魂印图标出错：{type(exc).__name__}: {exc}"
 
-        # buff 图标：buff 表有 icon 和 id
+        # buff 图标：buff 表有 icon 和 tag
+        # ★ 2026-11-16 修：icon 字段实际是 "[20]" 这种带方括号的字符串（3548/3548 全是），
+        #   原来直接 int(rows[0][0]) 必抛 ValueError → 被下面的 except 吃掉 →
+        #   「buff图标」这个类型整条 100% 不可用，报错还写成「查 buff 出错」误导人。
+        #   另外 tag='增伤' 那条 icon 是 '[]'（空），要单独报，不能说"没有这条"。
         if key == "signbuff":
             try:
                 rows = sess.execute(
-                    _text("select icon from buff where tag like :n limit 1"),
+                    _text("select icon, tag from buff where tag like :n order by id limit 5"),
                     {"n": f"%{target}%"},
                 ).fetchall()
-                if not rows or rows[0][0] is None:
+                if not rows:
                     return None, f"没有「{target}」对应的 buff 图标"
-                return int(rows[0][0]), ""
+                raw = str(rows[0][0] or "").strip().strip("[]").strip()
+                if not raw:
+                    return None, (f"【{target}】在 buff 表里有条目，"
+                                  f"但官方没给它图标编号（icon 是空值）")
+                return int(raw), ""
             except Exception as exc:  # noqa: BLE001
                 return None, f"查 buff 出错：{type(exc).__name__}: {exc}"
 
         return None, f"不支持的素材类型：{key}"
+
+    def _element_icon_id(self, target: str) -> tuple[int | None, str, str]:
+        """属性（系别）图标：返回 (组合编号, 显示名, 错误说明)。**只对应一张图。**
+
+        ★ 2026-11-16 两根接力，两次都以为查清楚了：
+          ① 交接里记的「pet_type 表不存在」是表名查错了 → 真名 element_type。
+          ② 第一版实现把双属性拆成 primary + secondary 发了两张，鱼片当场纠正：
+             **游戏里双属性精灵的图标本来就是一张合起来的图。**
+
+          所以口径统一到 element_type_combination.id，也就是 pet.type_id：
+
+            pet.type_id (78)
+              → element_type_combination.id (78) = '圣灵 战斗'
+              → PetType/78.png                    ← 一张合并图，6232 字节
+
+          证据（PetType/{id}.png 实测字节）：
+            18 (远古) 5151 / 16 (圣灵) 5817        ← 单属性
+            65 (远古 圣灵) 6867                    ← 合并图更宽
+            78 (圣灵 战斗) 6232                    ← 不灭战魂·盖亚
+
+          而且 139 条组合里，单属性的 combo.id 与 element_type.id **完全一致**（0 处例外），
+          所以同一个 icon_assets/element/ 目录能同时装「单属性图」和「组合图」。
+
+        target 支持三种写法：
+          · 属性名（远古 / 圣灵 / 草）  → 该属性的单属性组合编号
+          · 精灵名（不灭战魂·盖亚）    → pet.type_id
+          · 组合编号（78）              → 直接用
+        """
+        from .data import db_manager
+
+        sess = db_manager.get_all_sessions().get("seerapi")
+        if sess is None:
+            return None, "", "seerapi 数据库还没加载完"
+        try:
+            from sqlalchemy import text as _text
+        except Exception:
+            return None, "", "sqlalchemy 不可用"
+
+        name = (target or "").strip()
+        if not name:
+            return None, "", "要哪只精灵（或哪个属性）的图标？"
+
+        # ① 纯数字 → 先当组合编号，查不到再当精灵 id（群友常把精灵编号当属性编号报）
+        #    2026-11-16：日志里出现过「没有编号为 4677 的属性组合」，
+        #    而 4677 是精灵「星辰万象·天启星魂」，它的属性正是 123「神秘 轮回」。
+        if name.isdigit():
+            n = int(name)
+            row = sess.execute(
+                _text("select name from element_type_combination where id = :i"),
+                {"i": n},
+            ).fetchone()
+            if row:
+                return n, f"组合 {n} · {row[0]}", ""
+            prow = sess.execute(
+                _text("select name, type_id from pet where id = :i"),
+                {"i": n},
+            ).fetchone()
+            if prow and prow[1] is not None:
+                combo = sess.execute(
+                    _text("select name from element_type_combination where id = :t"),
+                    {"t": int(prow[1])},
+                ).fetchone()
+                if combo:
+                    return int(prow[1]), f"{prow[0]}（精灵 {n}）· {combo[0]}", ""
+            return None, "", (f"编号 {n} 既不是属性组合编号（1~226），"
+                              f"也不是库里收录的精灵编号。")
+
+        # ② 属性名 / 属性组合名 —— 空格、顺序都随意
+        #    ★ 2026-11-16 鱼片报：「神秘轮回」和「轮回神秘」反着说就认不出来。
+        #      根因是 combo.name 存的是 "神秘 轮回"（中间有一个空格），
+        #      而这里原来是 `where name = :n` 精确比较 —— 用户怎么打都差一个空格。
+        #      改成：把 139 条组合全取回来（很小），在内存里按「去空格」的规范化形式
+        #      建两个索引，正序和反序都认。
+        try:
+            combos = sess.execute(
+                _text("select id, name, primary_id, secondary_id "
+                      "from element_type_combination")
+            ).fetchall()
+            etypes = {
+                int(r[0]): str(r[1]) for r in sess.execute(
+                    _text("select id, name from element_type")
+                ).fetchall()
+            }
+        except Exception as exc:  # noqa: BLE001
+            return None, "", f"读属性组合表出错：{type(exc).__name__}: {exc}"
+
+        def _squash(s: str) -> str:
+            return re.sub(r"[\s·,，/、・]+", "", str(s))
+
+        want = _squash(name)
+        single: dict[str, tuple[int, str]] = {}
+        dual: dict[str, tuple[int, str]] = {}
+        for cid, cname, p1, p2 in combos:
+            key = _squash(cname)
+            if p2 is None:
+                single[key] = (int(cid), str(cname))
+            else:
+                dual[key] = (int(cid), str(cname))
+                n1 = etypes.get(int(p1), "")
+                n2 = etypes.get(int(p2), "")
+                if n1 and n2:
+                    # 反序也认：'轮回神秘' → '神秘 轮回'
+                    dual.setdefault(n2 + n1, (int(cid), str(cname)))
+
+        hit = single.get(want) or dual.get(want)
+        if hit:
+            return hit[0], hit[1], ""
+
+        # ③ 精灵名 → pet.type_id（它本身就是组合编号）
+        try:
+            pets, _matched = self._pet_config_handler._resolve_pets(name)
+        except Exception as exc:  # noqa: BLE001
+            return None, "", f"解析精灵名出错：{type(exc).__name__}: {exc}"
+        if not pets:
+            all_types = "、".join(
+                str(r[0]) for r in sess.execute(
+                    _text("select name from element_type_combination "
+                          "where secondary_id is null order by id")
+                ).fetchall()
+            )
+            return None, "", (f"「{name}」既不是属性名，也认不出是哪只精灵。"
+                              f"属性名可以试：{all_types}")
+        if len(pets) > 1:
+            names = "、".join(f"{p.name}({p.id})" for p in pets[:5])
+            return None, "", f"「{name}」匹配到多只：{names}。请说得更具体。"
+
+        pet = pets[0]
+        try:
+            row = sess.execute(
+                _text("select name, type_id from pet where id = :i"),
+                {"i": int(pet.id)},
+            ).fetchone()
+        except Exception as exc:  # noqa: BLE001
+            return None, "", f"查 pet.type_id 出错：{type(exc).__name__}: {exc}"
+        if not row or row[1] is None:
+            return None, "", f"【{pet.name}】在 pet 表里没有登记属性（type_id 为空）"
+
+        cid = int(row[1])
+        cmb = sess.execute(
+            _text("select name from element_type_combination where id = :t"),
+            {"t": cid},
+        ).fetchone()
+        if not cmb:
+            return None, "", f"【{pet.name}】的 type_id={cid} 在属性组合表里查不到"
+        return cid, f"{pet.name} · {cmb[0]}", ""
 
 
     @llm_tool(name="seer_asset")
@@ -1059,24 +1461,100 @@ class SeerInfoPlugin(Star):
         「魂印图标有吗」「XX 的部件图」「道具图标」时用它。
         **这就是「要图」的工具**——不要用 seer_pet（那只返回文字）。
 
-        # 参数
-        kind   素材类型，必须是下面之一：
-               立绘 / 头像 / 刻印图标 / 套装图标 / 部件图 / 称号图标 /
-               异常状态图标 / 魂印图标 / buff图标 / 属性图标 / 道具图标
-        target 要查的名字（精灵名、套装名、异常状态名、刻印名…）
-
         # 注意
         图标类素材很多是几十像素的小图，这是游戏原素材的尺寸，不是画质问题。
         查不到会说明是名字不对还是这类素材没收录。
+
+        Args:
+            kind(string): 素材类型，必须是下面之一：
+                立绘 / 头像 / 刻印图标 / 套装图标 / 部件图 / 称号图标 /
+                异常状态图标 / 魂印图标 / buff图标 / 属性图标 / 道具图标
+            target(string): 要查的名字（精灵名、套装名、异常状态名、刻印名…）。
+                **属性图标例外**：target 可以填属性名，也可以填属性组合
+                （「神秘轮回」「轮回神秘」「神秘 轮回」都认，顺序和空格随意），
+                或者填精灵名。双属性发的是**一张合并图标**（游戏原样），不要拆成两张。
+
+        # 只发被问的那一个
+        群友问什么就查什么。**不要顺带举例「还有 XX 精灵也是这个属性」，
+        也不要主动去查别人没提到的精灵** —— 那也是费一次工具调用，
+        而且经常举错。工具报「查不到」时直接照实说，不要自己补内容。
         """
         key = self._ASSET_KINDS.get((kind or "").strip())
         if not key:
             kinds = "、".join(sorted(set(self._ASSET_KINDS)))
             return f"没认出素材类型「{kind}」。可用的有：{kinds}"
 
+        # ── 属性图标：只发一张（双属性在游戏里本来就是合并图）──
+        if key == "element":
+            rid, label, err = self._element_icon_id((target or "").strip())
+            if err:
+                return err
+            getter = self._asset_getter(key)
+            if getter is None:
+                return "类型「属性图标」没有对应的取图器"
+
+            data = self._local_asset(key, rid)
+            src = "本地"
+            if data is None:
+                try:
+                    data = await getter(str(rid))
+                    src = "在线"
+                except Exception as exc:  # noqa: BLE001
+                    return f"【{label}】的属性图标没取到：{type(exc).__name__}: {exc}"
+            if not data:
+                return f"【{label}】的属性图标官方没放（组合编号 {rid}）"
+            data = self._upscale_if_small(data)
+
+            import base64 as _b64
+            import astrbot.api.message_components as Comp
+            try:
+                from astrbot.core.message.message_result import MessageChain
+            except Exception:
+                from astrbot.core.message.message_event_result import MessageChain
+            try:
+                chain = MessageChain(chain=[
+                    Comp.Image.fromBase64(_b64.b64encode(data).decode()),
+                    Comp.Plain(f"{label} · 属性图标"),
+                ])
+                await self.context.send_message(event.unified_msg_origin, chain)
+                return (f"【{label}】的属性图标已发出"
+                        f"（{len(data) // 1024 or 1} KB，来自{src}）。")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[seer_asset] 属性图标发送失败: %s", exc)
+                return f"取到图了（{len(data)} 字节）但没发出去：{type(exc).__name__}"
+
         rid, err = self._asset_id(key, (target or "").strip())
         if rid is None:
             return err
+
+        # ── 道具图标：走 items.url 子目录直连（比盲试 7 个目录少 6 次请求）──
+        if key == "item":
+            data = self._local_asset(key, rid)
+            src = "本地"
+            if data is None:
+                data, src = await self._fetch_item_icon(int(rid))
+            if not data:
+                return (f"「{target}」的道具图标官方没放"
+                        f"（编号 {rid}，7 个子目录都试过了）")
+            data = self._upscale_if_small(data)
+
+            import base64 as _b64
+            import astrbot.api.message_components as Comp
+            try:
+                from astrbot.core.message.message_result import MessageChain
+            except Exception:
+                from astrbot.core.message.message_event_result import MessageChain
+            try:
+                chain = MessageChain(chain=[
+                    Comp.Image.fromBase64(_b64.b64encode(data).decode()),
+                    Comp.Plain(f"{target} · 道具图标"),
+                ])
+                await self.context.send_message(event.unified_msg_origin, chain)
+                return (f"「{target}」的道具图标已发出"
+                        f"（{len(data) // 1024 or 1} KB，来自{src}）。")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[seer_asset] 道具图标发送失败: %s", exc)
+                return f"取到图了（{len(data)} 字节）但没发出去：{type(exc).__name__}"
 
         getter = self._asset_getter(key)
         if getter is None:
@@ -1093,6 +1571,7 @@ class SeerInfoPlugin(Star):
                 return f"下载素材图失败：{type(exc).__name__}: {exc}"
         if not data:
             return f"「{target}」的{kind}没有取到（可能这款素材官方没放）"
+        data = self._upscale_if_small(data)
 
         import base64
         import astrbot.api.message_components as Comp
@@ -1116,9 +1595,156 @@ class SeerInfoPlugin(Star):
     # 原命令「收录配置图」是裸名识别 + 白名单权限，逻辑都在 handler.save 里。
     # 这里不重写逻辑，只把群友的自然语言整理成标准 arg，再喂给 handler.save。
 
+    @llm_tool(name="seer_stone")
+    async def seer_stone(self, event: AstrMessageEvent, keyword: str = "") -> str:
+        """查【技能石】（把某个技能装在石头里、给任意精灵用的那种道具）。
+
+        # 什么时候用
+        群友问「草石之力是什么」「S级火系技能石有什么效果」「技能石能换什么技能」
+        「XX 技能石威力多少」时用它。
+
+        # 数据
+        技能石一共 105 块，按系别分 21 类，每块挂着 1~N 条随机效果（带概率）。
+        数据来自 seerapi 的 skill_stone / skill_stone_category / skill_stone_effect。
+
+        # 注意
+        效果原文里有 {0} {1} 这种占位符（表示"取哪个参数"），
+        具体数值要对应游戏里那一条，**不要自己填数**，照原文说即可。
+
+        Args:
+            keyword(string): 石头名字或技能名，例如「草石之力」「S级火系」「技能石」。
+                留空会列出各系别的技能石数量。
+        """
+        from .data import db_manager
+
+        sess = db_manager.get_all_sessions().get("seerapi")
+        if sess is None:
+            return "❌ seerapi 数据库还没加载完，等一会再问。"
+        try:
+            from sqlalchemy import text as _text
+        except Exception:
+            return "❌ sqlalchemy 不可用"
+
+        kw = (keyword or "").strip()
+        if not kw:
+            rows = sess.execute(_text(
+                "select c.name, count(*) from skill_stone s "
+                "left join skill_stone_category c on c.id = s.category_id "
+                "group by c.name order by count(*) desc"
+            )).fetchall()
+            total = sess.execute(_text("select count(*) from skill_stone")).fetchone()[0]
+            return ("技能石一共 " + str(total) + " 块，按系别分：\n  "
+                    + "\n  ".join(f"{r[0]}（{r[1]} 块）" for r in rows)
+                    + "\n\n报一个名字比如「草石之力」或「S级火系」就能查具体效果。")
+
+        rows = sess.execute(_text(
+            "select s.id, s.name, s.move_name, s.rank, s.power, s.max_pp, s.accuracy, "
+            "       c.name from skill_stone s "
+            "left join skill_stone_category c on c.id = s.category_id "
+            "where s.name like :a or s.move_name like :b "
+            "order by s.rank, s.id limit 6"
+        ), {"a": f"%{kw}%", "b": f"%{kw}%"}).fetchall()
+        if not rows:
+            return f"没找到含「{kw}」的技能石。可以报系别名，比如「草石之力」「S级火系」。"
+        if len(rows) > 5:
+            names = "、".join(str(r[1]) for r in rows[:6])
+            return f"「{kw}」匹配到多块：{names}…。说得更具体一点。"
+
+        out = []
+        for sid, sname, mname, rank, power, pp, acc, cname in rows:
+            out.append(f"【{sname}】→ 技能【{mname}】")
+            out.append(f"  {cname or '?'} · {rank} 级 · 威力 {power} · PP {pp} · 命中 {acc}")
+            effs = sess.execute(_text(
+                "select e.prob, t.info from skill_stone_effect e "
+                "left join skill_effect_type t on t.id = e.inner_id "
+                "where e.skill_stone_id = :i order by e.prob desc, e.id"
+            ), {"i": sid}).fetchall()
+            if effs:
+                out.append("  效果（{} 条）：".format(len(effs)))
+                for prob, info in effs:
+                    pct = f"{float(prob) * 100:g}%" if prob is not None else "?"
+                    txt = (info or "（这条没有文字说明）").replace("\n", " ").strip()
+                    out.append(f"    {pct}  {txt}")
+            else:
+                out.append("  这块石头没有登记随机效果。")
+            out.append("")
+        return "\n".join(out).rstrip()
+
+    @llm_tool(name="seer_story")
+    async def seer_story(self, event: AstrMessageEvent, pet: str = "") -> str:
+        """查精灵的【官方剧情原文】—— 图鉴里那本《永夜纪年》/《莱达物语》的正文。
+
+        # 什么时候用
+        群友问「XX 的背景故事」「XX 的剧情」「图鉴里怎么写 XX」「讲讲 XX 的来历」时用它。
+        **问技能/数值不要用它**（那些走 seer_pet / seer_skill）。
+
+        # 数据
+        733 只精灵有剧情，分在《永夜纪年》和《莱达物语》两本书里，
+        每篇 300~500 字，原文带换行分段。
+
+        # 注意
+        这是官方原文，**照原样给，不要改写、不要补设定**。
+        群友没问剧情就别主动贴。
+
+        Args:
+            pet(string): 精灵名或精灵编号。
+        """
+        from .data import db_manager
+
+        sess = db_manager.get_all_sessions().get("seerapi")
+        if sess is None:
+            return "❌ seerapi 数据库还没加载完，等一会再问。"
+        try:
+            from sqlalchemy import text as _text
+        except Exception:
+            return "❌ sqlalchemy 不可用"
+
+        name = (pet or "").strip()
+        if not name:
+            n = sess.execute(_text(
+                "select count(distinct pet_id) from pet_archive_story_entry"
+            )).fetchone()[0]
+            return (f"要查哪只精灵的剧情？目前 {n} 只精灵有收录"
+                    f"（《永夜纪年》和《莱达物语》两本）。")
+
+        # 数字当 id 直接查，否则走精灵名解析
+        pid = None
+        if name.isdigit():
+            row = sess.execute(_text("select id, name from pet where id = :i"),
+                               {"i": int(name)}).fetchone()
+            if row:
+                pid, name = int(row[0]), str(row[1])
+        if pid is None:
+            try:
+                pets, _matched = self._pet_config_handler._resolve_pets(name)
+            except Exception as exc:  # noqa: BLE001
+                return f"解析精灵名出错：{type(exc).__name__}: {exc}"
+            if not pets:
+                return f"库里没有叫「{name}」的精灵。"
+            if len(pets) > 1:
+                names = "、".join(f"{p.name}({p.id})" for p in pets[:5])
+                return f"「{name}」匹配到多只：{names}。说得更具体一点。"
+            pid, name = int(pets[0].id), str(pets[0].name)
+
+        rows = sess.execute(_text(
+            "select b.name, s.content from pet_archive_story_entry s "
+            "left join pet_archive_story_book b on b.id = s.book_id "
+            "where s.pet_id = :p order by s.id"
+        ), {"p": pid}).fetchall()
+        if not rows:
+            return f"【{name}】没有收录剧情（733 只里有它以外的那批）。"
+
+        parts = []
+        for book, content in rows:
+            text = (content or "").replace("\\n", "\n").strip()
+            if len(text) > 900:
+                text = text[:900] + "…（后面还有，要完整的告诉我）"
+            parts.append(f"【{name}】《{book or '图鉴'}》\n{text}")
+        return "\n\n".join(parts)
+
     @llm_tool(name="seer_config_submit")
     async def seer_config_submit(
-        self, event: AstrMessageEvent, pet: str, author: str = "", note: str = ""
+        self, event: AstrMessageEvent, pet: str = "", author: str = "", note: str = ""
     ) -> str:
         """收录群友投稿的配置图（把群友发的截图存进图库，供以后查询）。
 
@@ -1132,18 +1758,18 @@ class SeerInfoPlugin(Star):
         2. 群友必须说清是**哪只精灵**（名字或 ID）。
         3. 群友要有收录权限（白名单）。没有权限会被挡下，如实转告即可。
 
-        # 参数（从群友的话里提取，别自己编）
-        pet    精灵名或 ID
-        author 作者名。群友没说就留空，会用手打作者（群昵称）
-        note   备注。群友说了配装细节就填，比如「5级秘咒，7级特攻加一天蛇」；
-               没说就留空，**不要自己编备注**
-
         # 同名处理
         一只精灵可以有多套配置，按作者区分：新作者新增一套，同作者再传会替换他自己那套。
         这条规则由 handler 处理，你不用管。
 
         # 和 seer_player_config 的区别
         seer_player_config 是**查**投稿；本工具是**存**投稿。
+
+        Args:
+            pet(string): 精灵名或 ID（**必填**，先确认是哪只再调）。
+            author(string): 作者名。群友没说就留空，会用手打作者（群昵称）。
+            note(string): 备注。群友说了配装细节就填，比如「5级秘咒，7级特攻加一天蛇」；
+                没说就留空，**不要自己编备注**。
         """
         handler = self._pet_config_handler
 

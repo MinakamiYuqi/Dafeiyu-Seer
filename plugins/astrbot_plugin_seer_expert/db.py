@@ -1141,6 +1141,23 @@ class SeerKnowledge:
 
     _VS_CN = {"phys": "物理", "spec": "特殊"}
 
+    def _default_nature(self, petname: str) -> str:
+        """没指定性格时，按流派给一个**游戏里真实存在**的性格。
+
+        ★ 2026-11-16 鱼片指出：这里原来填的是「中性」，而游戏 25 种性格
+          （seerapi.nature id 0~24）里根本没有这一种 ——
+          20~24 是「平衡发展」（害羞/实干/坦率/浮躁/认真），
+          并没有「什么都不加」的性格。所以不能留空，也不能自己造一个。
+
+        规则与 build_view 的 NATURE_BY_STYLE 一致：
+          物攻向 固执(+攻−特攻) / 特攻向 保守(+特攻−攻) / 双攻向 坦率(平衡)
+        """
+        try:
+            style = self.pick_style_by_stats(petname)
+        except Exception:  # noqa: BLE001
+            style = ""
+        return (self.NATURE_BY_STYLE.get(style) or {}).get("爆攻", "坦率")
+
     def _resolve_ev_spec(
         self,
         petname: str,
@@ -1154,7 +1171,7 @@ class SeerKnowledge:
         eye: str = "",
         team_skip: str = "",
         budget: int = 510,
-        hpup: int = 0,
+        hpup: int = 20,
     ) -> tuple[dict[str, int], str]:
         """把 pet_build 的 ev 写法解析成实际学习力。
 
@@ -1376,16 +1393,17 @@ class SeerKnowledge:
         #   通用 PRESET_MINTS 只按物攻/特攻分两套，对无极（二角极差）、
         #   无为（三310）、玄武（双防向）全给错，必须让专属表覆盖。
         _own = self.pet_build(pid) if hasattr(self, "pet_build") else {}
+        # ★ 2026-11-16：用户传了 mints 就用用户的；没传才用 pet_build 里的专属配装
         if _own.get("mints"):
             view["found"] = True
             view["pid"] = pid
             view["pet_name"] = petname
             view["mints"] = list(_own["mints"])
-            view["nature"] = _own.get("nature") or nature or "固执"
+            view["nature"] = nature or _own.get("nature") or "固执"
             view["preset"] = "专属"
-            view["suit"] = _own.get("suit") or suit
-            view["title"] = _own.get("title") or title
-            view["eye"] = _own.get("eye") or eye
+            view["suit"] = suit or _own.get("suit") or ""
+            view["title"] = title or _own.get("title") or ""
+            view["eye"] = eye or _own.get("eye") or ""
             view["team_skip"] = _own.get("team_skip") or ""
             view["soulmod"] = _own.get("soulmod") or ""
             _evs = str(_own.get("ev") or "").strip()
@@ -1626,16 +1644,34 @@ class SeerKnowledge:
         return out
 
     def lookup_suit(self, name: str) -> dict:
-        """套装：suit → suit_bonus（desc 是文本，逐项数值靠正则解析）。"""
+        """套装逐项加成：**先读 suit_bonus_attr 表**，表里没有才回退正则解析描述。
+
+        ★ 2026-11-16 修（鱼片问「圣芒能不能到一千」时暴露）：
+          原来只靠 `_parse_bonus_text(desc)` 解析那句中文，而圣芒佑界套装
+          写的是「己方精灵体力+100点，其他能力+80点」——
+          正则只解出 hp:10，**真实属性是 攻80 防80 特攻80 特防80 速80 体100（500）**。
+          同文件里 lookup_title / lookup_eyepiece 都是读表的，只有套装走文本解析，
+          早期以为套装只有文本，后来 attr 表补齐了但这里没跟上。
+        """
         rows = self._q(
-            "select s.id, s.name, b.desc from suit s "
+            "select s.id, s.name, b.desc, "
+            "a.atk, a.def, a.sp_atk, a.sp_def, a.spd, a.hp "
+            "from suit s "
             "left join suit_bonus b on b.id=s.id "
+            "left join suit_bonus_attr a on a.id = b.attribute_id "
             "where s.name = ? or s.name like ? limit 1", (name, "%" + name + "%")
         )
         if not rows:
             return {}
-        rid, rname, desc = rows[0]
-        desc = str(desc or "")
+        r = rows[0]
+        rid, rname, desc = r[0], r[1], str(r[2] or "")
+        vals = {"atk": int(r[3] or 0), "def": int(r[4] or 0),
+                "sp_atk": int(r[5] or 0), "sp_def": int(r[6] or 0),
+                "spd": int(r[7] or 0), "hp": int(r[8] or 0)}
+        if any(vals.values()):
+            return {"id": rid, "name": rname, "text": desc, "vals": vals,
+                    "total": sum(vals.values())}
+        # 老套装没有属性行 → 回退正则（至少能拿到一部分）
         return {"id": rid, "name": rname, "text": desc,
                 "vals": self._parse_bonus_text(desc)}
 
@@ -2507,6 +2543,14 @@ class SeerKnowledge:
             type_name = self.pet_type(pid) or ""
         except Exception:
             pass
+        # ★ 2026-11-16：性格没指定时按流派选一个**游戏里真实存在**的，
+        #   并且要真的参与计算（不只是图上写个字）。
+        #   游戏 25 种性格（nature id 0~24）里没有「什么都不加」的那一种，
+        #   所以留空时必须自己挑一个，不能显示一个虚构名字。
+        if not str(nature or "").strip():
+            nature = self._default_nature(petname)
+        # 默认三件套 —— 统一走 _resolve_equip（别在这里再写一遍规则）
+        suit, title, eye = self._resolve_equip(suit, title, eye)
         view["found"] = True
         view["pet"] = {
             "name": petname, "id": pid, "types": type_name,
@@ -2541,7 +2585,7 @@ class SeerKnowledge:
             "ev_total": ev_total,
             "talent": talent,
             "hpup": f"{min(int(hpup or 0), 20)}/20",
-            "nature": nature or "中性",
+            "nature": str(nature),
             "ability": "（默认不选）",
         }
 
@@ -2614,6 +2658,11 @@ class SeerKnowledge:
                 # 逐项（只列非零），模板直接渲染
                 "vals_list": [{"key": k, "cn": self._STAT_CN.get(k, k), "val": int(_vals.get(k, 0) or 0)}
                               for k in _STAT_KEYS if int(_vals.get(k, 0) or 0)],
+                # 2026-11-16：固定六格（攻/防/特攻/特防/速/体），缺的为 0。
+                #   vals_list 只列非零，三颗刻印条目数不同 → 排出来参差不齐；
+                #   用这个固定顺序渲染，三颗的每一项上下一定对齐，好横向比大小。
+                "vals_six": [{"key": k, "cn": self._STAT_CN.get(k, k),
+                              "val": int(_vals.get(k, 0) or 0)} for k in _STAT_KEYS],
                 "found": bool(info),
             })
             if not info:
@@ -2631,11 +2680,19 @@ class SeerKnowledge:
             _gname, _, _skill = _s.partition("@")
             _gname = _gname.strip()
             _info = self.lookup_gem(_gname) if hasattr(self, "lookup_gem") else {}
+            _lvl = int(_info.get("level") or 0)
             _gems.append({
                 "raw": _s,
+                "id": _info.get("id"),
                 "name": _info.get("name") or _gname,
                 "effect": _info.get("desc") or "",
                 "skill": _skill.strip(),
+                # 2026-11-16：图上要画「菱形 + 等级罗马数字」，等级从名字里拿不到
+                #   （「威力宝石Lv7」这种能，但「护罩回溯宝石V」用的是罗马数字），
+                #   所以直接用库里的 level 字段。
+                "level": _lvl,
+                "roman": {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V",
+                          6: "VI", 7: "VII", 8: "VIII", 9: "IX", 10: "X"}.get(_lvl, str(_lvl)),
                 "found": bool(_info),
             })
         view["gems"] = _gems
@@ -2852,7 +2909,10 @@ class SeerKnowledge:
         team: bool = True,
         year_bonus: bool = True,
         team_skip: str = "",
-        hpup: int = 0,
+        # ★ 2026-11-16：原来是 0，而 config_view 是 20 —— 同一个参数两个默认值，
+        #   导致「六项和均分」型精灵（无为觉者）stat 比配置图每项少 10。
+        #   统一成 20（满配默认带体力上限药剂）。要裸算传 hpup=0。
+        hpup: int = 20,
     ) -> dict[str, Any]:
         """面板计算：种族值 → 满级面板（可叠刻印/套装/称号/目镜）。
 
@@ -2880,6 +2940,10 @@ class SeerKnowledge:
         view["found"] = True
         view["name"] = petname
         view["pid"] = pid
+
+        # ★ 2026-11-16：默认三件套和 config_view 走同一个方法，
+        #   否则 stat 少算 370（晨曦120+神话150+AH100）。
+        suit, title, eye = self._resolve_equip(suit, title, eye)
 
         # ① 学习力写法
         alias = {"攻": "atk", "防": "def", "特攻": "sp_atk", "特防": "sp_def",
@@ -3000,6 +3064,47 @@ class SeerKnowledge:
         view["total"] = sum(r["final"] for r in rows)
         return view
 
+    _GEM_CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+                   "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+    _GEM_ROMAN = {"Ⅰ": 1, "Ⅱ": 2, "Ⅲ": 3, "Ⅳ": 4, "Ⅴ": 5,
+                  "Ⅵ": 6, "Ⅶ": 7, "Ⅷ": 8, "Ⅸ": 9, "Ⅹ": 10}
+
+    def _split_gem_name(self, raw: str) -> tuple[str, int]:
+        """把口语化的宝石名拆成（核心词, 等级）。
+
+        「五级焚宝石」→ ("焚", 5)   「焚宝石Lv5」→ ("焚", 5)
+        「焚烬宝石Ⅴ」→ («焚烬», 5)  「焚宝石」  → ("焚", 0)
+        去掉「宝石」二字再模糊，是因为群友经常把中间的字省掉（焚烬→焚）。
+        """
+        s = str(raw or "").strip()
+        if not s:
+            return "", 0
+        # 半角罗马 → 全角罗马（群友常打「护罩回溯宝石V」，库里是「Ⅴ」）
+        for k, v in (("VIII", "Ⅷ"), ("VII", "Ⅶ"), ("III", "Ⅲ"), ("VI", "Ⅵ"),
+                     ("IV", "Ⅳ"), ("IX", "Ⅸ"), ("II", "Ⅱ"), ("X", "Ⅹ"),
+                     ("V", "Ⅴ"), ("I", "Ⅰ")):
+            s = s.replace(k, v)
+        s = s.replace("宝石", "")
+        lv = 0
+        # ① 带「级」的写法，等级可能在任意位置：「五级焚」「焚Lv5级」
+        m = re.search(r"(?:lv|LV|Lv)?\s*([一二三四五六七八九十]|\d{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ])\s*级", s)
+        # ② 不带「级」的写法，等级在结尾：「焚Lv5」「焚烬Ⅴ」
+        if not m:
+            m = re.search(r"(?:lv|LV|Lv)?\s*([一二三四五六七八九十]|\d{1,2}|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ])$", s)
+        if m:
+            tok = m.group(1)
+            if tok in self._GEM_CN_NUM:
+                lv = self._GEM_CN_NUM[tok]
+            elif tok in self._GEM_ROMAN:
+                lv = self._GEM_ROMAN[tok]
+            elif tok.isdigit():
+                lv = int(tok)
+            if lv:
+                # ★ 用「删掉等级片段、保留其余」而不是 s[:m.start()]：
+                #   「五级焚」里等级在开头，切前缀会把「焚」也切没。
+                s = (s[:m.start()] + s[m.end():]).strip()
+        return s, lv
+
     def lookup_gem(self, name: str) -> dict:
         """按名字查宝石。返回 id / name / level / desc。
 
@@ -3015,6 +3120,20 @@ class SeerKnowledge:
             "order by level desc, id limit 1", (raw, "%" + raw + "%")
         )
         if not rows:
+            # ★ 2026-11-16 鱼片报「五级焚宝石」查不到，真名是「焚烬宝石Ⅴ」。
+            #   群友的写法普遍是：漏字（焚≠焚烬）、阿拉伯数字（Lv5 / 5级）、
+            #   中文数字（五级）、罗马数字（Ⅴ）。所以再走一遍归一化匹配。
+            _core, _want = self._split_gem_name(raw)
+            if _core:
+                cands = self._q(
+                    "select id, name, level from gem where name like ? "
+                    "order by level desc, id", ("%" + _core + "%",)
+                )
+                if _want:
+                    cands = [r for r in cands if int(r[2] or 0) == _want] or cands
+                if cands:
+                    rows = [cands[0]]
+        if not rows:
             return {}
         gid, gname, level = rows[0]
         desc = ""
@@ -3026,6 +3145,35 @@ class SeerKnowledge:
         if eff:
             desc = str(eff[0][0] or "")
         return {"id": gid, "name": gname, "level": level, "desc": desc}
+
+    def _resolve_equip(self, suit: str, title: str, eye: str) -> tuple[str, str, str]:
+        """套装 / 称号 / 目镜的默认值 —— **算配置的入口全走这里，别各写一遍**。
+
+        2026-11-16 鱼片定的规则：
+          默认            晨曦之星战甲 / 神话 / 漫游者-AH
+          提到「裁决」    影翼裁决 / 星光铸就者 / 漫游者-AH（没说称号时才替换）
+          显式传「无」    → 这件不要（算裸面板）
+
+        为什么必须是同一个函数：config_view 和 stat_view 各写一遍时，
+        stat 那边漏了三件套，导致「无极圣武 stat 2643 vs 配置图 3013」（差 370）。
+        """
+        _BLANK = {"无", "裸", "裸装", "不带", "none", "None", "null", "-"}
+        _s = str(suit or "").strip()
+        _t = str(title or "").strip()
+        _e = str(eye or "").strip()
+        if _s in _BLANK:
+            _s = ""
+        elif not _s:
+            _s = "晨曦之星战甲"
+        if _t in _BLANK:
+            _t = ""
+        elif not _t:
+            _t = "星光铸就者" if "裁决" in _s else "神话"
+        if _e in _BLANK:
+            _e = ""
+        elif not _e:
+            _e = "漫游者-AH"
+        return _s, _t, _e
 
     def lookup_mintmark(self, name: str) -> dict:
         """按名字查刻印数值（满级六项，**含隐藏加成**）。查不到返回 {}。

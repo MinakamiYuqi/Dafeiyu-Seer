@@ -248,7 +248,10 @@ SignBuffImageGetter = GetImage(
 )
 
 # 道具图标：不同道具类型放在不同子目录，按顺序碰，最后一个兜底
-_ITEM_ICON_DIRS = ("doodle", "petitem", "skillstone", "throw", "userinfo", "glasses")
+# ★ 2026-11-16：补上 "cloth"。手册 items.db 的 url 字段统计出来的真实分布：
+#   doodle 8859 / cloth 2129 / petitem 712 / skillstone 105 / throw 94
+#   cloth 那 2129 个（服装类道具）以前盲试必然会 404。
+_ITEM_ICON_DIRS = ("doodle", "cloth", "petitem", "skillstone", "throw", "userinfo", "glasses")
 ItemImageGetter = GetImage(
     *[
         f"https://cnb.cool/SeerAPI/seer-unity-assets/-/git/raw/main/newseer/assets/art/ui/assets/item/{sub}/icon/{{}}.png"

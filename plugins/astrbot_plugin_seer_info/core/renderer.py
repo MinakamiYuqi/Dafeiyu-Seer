@@ -312,26 +312,44 @@ class LocalRenderer:
         return await page.screenshot(**screenshot_kwargs)
 
     async def close(self):
+        """关闭浏览器。★ 2026-11-16 改成「任何一步失败都不许中断后面」。
+
+        原来 `await page.close()` 只抓 `asyncio.QueueEmpty`，而 Playwright 实际抛的是
+        `Exception: Page.close: Connection closed while reading from the driver`
+        （浏览器进程已退 / driver 断开时必然出现）。异常一冒，下面 context、
+        browser、playwright 全都没关 → AstrBot 报「插件未被正常终止，可能导致资源泄露」。
+
+        现在每一步各自兜异常：关不掉就算了，但绝不能挡住后面的清理。
+        """
         while not self._page_pool.empty():
             try:
                 page = self._page_pool.get_nowait()
-                if not page.is_closed():
-                    await page.close()
             except asyncio.QueueEmpty:
                 break
+            try:
+                if not page.is_closed():
+                    await page.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[renderer] page 关闭失败（浏览器可能已退）：%s", exc)
         if self._context:
             try:
                 await self._context.close()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[renderer] context 关闭失败：%s", exc)
             self._context = None
         if self._browser:
-            if self._browser.is_connected():
-                await self._browser.close()
+            try:
+                if self._browser.is_connected():
+                    await self._browser.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[renderer] browser 关闭失败：%s", exc)
             self._browser = None
             logger.info("Playwright 浏览器已关闭")
         if self._playwright:
-            await self._playwright.stop()
+            try:
+                await self._playwright.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[renderer] playwright.stop 失败：%s", exc)
             self._playwright = None
 
     async def prewarm(self):
