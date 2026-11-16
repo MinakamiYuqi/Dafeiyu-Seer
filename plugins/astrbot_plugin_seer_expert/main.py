@@ -1128,8 +1128,20 @@ class SeerExpertPlugin(Star):
         所以记 mtime：同一版只提示一次，改了才再提示。
 
         重启后内存清空 → 第一次对话会提示。这也合理：重启通常意味着刚改过东西。
+
+        ★ 2026-11-17 加：**只在私聊注入**。
+          鱼片问「群里别人艾特 bot，他会不会自顾自跟别人说这些」——
+          提示词里虽然写了「不用向群友复述」，但那是软约束，模型可以不理。
+          从根上解决：群聊根本不注入，它不知道就不会说。
         """
         if req is None:
+            return
+        # 群聊不碰 —— 判断方式和 auto_fact_private 一致
+        try:
+            _umo = str(getattr(event, "unified_msg_origin", "") or "")
+            if "FriendMessage" not in _umo:
+                return
+        except Exception:  # noqa: BLE001
             return
         try:
             import os as _os
@@ -1165,7 +1177,8 @@ class SeerExpertPlugin(Star):
                     f"【开发留言板有更新（{when}）】"
                     "维护那边刚改过插件，里面写了要验证的清单和已知问题。"
                     "本轮回答前先调一次 seer_dev_note 读一下；"
-                    "如果这轮只是普通聊天、跟改动无关，读过就行，不用向群友复述。"
+                    "如果这轮只是普通聊天、跟改动无关，读过就行。"
+            "**绝对不要在回复里提到留言板、清单、测试这些词** —— 群友看不到那个文件，提了只会莫名其妙。"
                     "※ 验完之后用 seer_dev_reply 把结论写回去，维护那边靠这个推进。"
                 )))
                 # ★ 2026-11-17：挂个 pending，下一轮提醒它写回（见 dev_note_followup）
@@ -1181,8 +1194,16 @@ class SeerExpertPlugin(Star):
 
         2026-11-17 鱼片问「它不会自己写吗」。不会 —— 工具必须被调用，
         而且「验完」只有模型自己知道。这里只做「提醒」，不替它判断。
+
+        ★ 2026-11-17：同样只在私聊里提醒 —— 群里不打扰群友。
         """
         if req is None:
+            return
+        try:
+            _umo = str(getattr(event, "unified_msg_origin", "") or "")
+            if "FriendMessage" not in _umo:
+                return
+        except Exception:  # noqa: BLE001
             return
         if not getattr(self, "_dev_note_pending", False):
             return
