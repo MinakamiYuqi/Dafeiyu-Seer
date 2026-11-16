@@ -2805,6 +2805,17 @@ class SeerExpertPlugin(Star):
                 #             整篇进上下文每轮都要花 token。
                 if len(txt) > 8000:
                     txt = txt[:8000] + "\n\n……（后面还有，让维护那边精简一下）"
+
+                # ★ 2026-11-17：读留言板这个动作本身，也要刷新 pending 的保质期。
+                #   因为「读了清单」= 「即将按清单做事」，
+                #   从这一刻起算 10 分钟才合理（原来只在注入提示时计时，
+                #   如果 bot 隔了 9 分钟才真去读，剩 1 分钟就过期了）。
+                try:
+                    self._dev_note_pending = True
+                    self._dev_note_pending_at = __import__("time").time()
+                except Exception:  # noqa: BLE001
+                    pass
+
                 return f"【开发留言板 · {when}】\n\n{txt}"
 
         return ("留言板还没建。维护那边会在 `plugin_data/astrbot_plugin_seer_expert/"
