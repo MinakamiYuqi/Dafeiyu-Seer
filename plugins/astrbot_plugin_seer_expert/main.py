@@ -1129,11 +1129,18 @@ class SeerExpertPlugin(Star):
 
         重启后内存清空 → 第一次对话会提示。这也合理：重启通常意味着刚改过东西。
 
-        ★ 2026-11-17 定稿：**群聊和私聊都注入**，但要求「测完私聊汇报，别在群里说」。
-          鱼片原话：「改成群里触发之后，bot 测试完主动私聊跟我说这件事怎么样」
-          —— 群里 @bot 是最自然的触发，结果私聊给他，两边都不打扰。
+        ★ 2026-11-17 定稿：**只在私聊注入**。
+          鱼片试过「群聊也触发」，结论是太麻烦（要处理测试图发哪、
+          群友要的图会不会被劫走之类的一堆边界），所以回滚成只私聊。
+          群里 @bot 不会让 bot 去看留言板。
         """
         if req is None:
+            return
+        # 只认私聊 —— 用插件里已有的 _is_private，别自己拼 umo
+        try:
+            if not self._is_private(event):
+                return
+        except Exception:  # noqa: BLE001
             return
         try:
             import os as _os
@@ -1197,9 +1204,15 @@ class SeerExpertPlugin(Star):
         2026-11-17 鱼片问「它不会自己写吗」。不会 —— 工具必须被调用，
         而且「验完」只有模型自己知道。这里只做「提醒」，不替它判断。
 
-        ★ 2026-11-17：群聊私聊都提醒（跟 dev_note_guard 一致）。
+        ★ 2026-11-17 定稿：只私聊（跟 dev_note_guard 一致）。
         """
         if req is None:
+            return
+        # 只认私聊 —— 用插件里已有的 _is_private，别自己拼 umo
+        try:
+            if not self._is_private(event):
+                return
+        except Exception:  # noqa: BLE001
             return
         if not getattr(self, "_dev_note_pending", False):
             return
@@ -2819,21 +2832,10 @@ class SeerExpertPlugin(Star):
         #   实测 bug：群里说「111」→ bot 读了留言板 → pending=True，
         #   但「111」不需要验东西，它不会写回 → pending 永久 True
         #   → 之后群里任何人要图，全部掉私聊，群友以为 bot 坏了。
-        _PENDING_TTL = 600.0
-        # ★ 2026-11-17：必须同时满足「读过清单」+「清单里真有未完成的活」+「没过期」。
-        #   只看 _dev_note_pending 会把群友正常要图也劫走 —— 留言板空着时它也会 True。
-        _pending = bool(getattr(self, "_dev_note_pending", False)) and bool(
-            getattr(self, "_dev_note_has_work", False)
-        )
-        if _pending:
-            _at = float(getattr(self, "_dev_note_pending_at", 0.0) or 0.0)
-            _age = __import__("time").time() - _at
-            if _at <= 0 or _age > _PENDING_TTL:
-                self._dev_note_pending = False
-                _pending = False
-                logger.info(
-                    f"[赛尔] 留言板 pending 已过期（{_age:.0f}s），发图恢复走当前会话"
-                )
+        # 2026-11-17 定稿：不搞自动判定，图永远发当前会话。
+        # 之前的「测试期间改发私聊」整个撤掉了 —— 因为现在只有私聊会触发
+        # 看留言板，测试本来就发生在私聊里，不需要特殊处理。
+        # 群聊里要图也永远发群里，不会有「图莫名消失」的情况。
 
         targets = []
         if _pending:
