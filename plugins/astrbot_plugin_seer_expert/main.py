@@ -2851,10 +2851,19 @@ class SeerExpertPlugin(Star):
             return False
 
         # ★ 2026-11-17：发送失败重试一次。
-        #   日志实证 06:12:15 —— 连续两次发图会被 NapCat 挡，
-        #   报 <ActionFailed status='failed' retcode=100>，隔 20 秒再发就正常。
-        #   retcode=100 是 OneBot 侧的失败码（通常是发图太频繁），不是我们的 bug，
-        #   但对用户来说就是「图没出现」，所以等一下重发一次。
+        #
+        #   日志实证 06:12:15（完整措辞）：
+        #     <ActionFailed status='failed' retcode=100 data=None
+        #      wording='highway upload transport failed after 3 attempts
+        #               (cmdId=1003 chunk=893918/893918 offset=0): Error: read ECONNRESET'>
+        #
+        #   所以根因是 **ECONNRESET —— NapCat 往 QQ 服务器传图时连接被重置**，
+        #   不是「发图太频繁」（我一开始猜的那个），也不是「缓存没就绪」
+        #   （bot 一开始猜的那个）。两个归因都不准。
+        #
+        #   典型诱因：图比较大（这张 765 KB → base64 后 893 KB）、网络抖动。
+        #   ECONNRESET 是偶发的，隔一会儿重发通常就好 —— 所以重试是对的。
+        #   但重试只能救「偶发网络错误」，图太大这种根因治不了。
         import asyncio as _aio
 
         _last_exc = None
@@ -2875,7 +2884,7 @@ class SeerExpertPlugin(Star):
                     _retryable = ("retcode=100" in _s) or ("ActionFailed" in _s)
                     if _attempt == 1 and _retryable:
                         logger.info(
-                            f"[seer_expert] 图片被平台拒绝（多半是发图太频繁），"
+                            f"[seer_expert] 图片上传失败（NapCat 侧网络问题，非频控），"
                             f"1.5 秒后重试{f'（{label}）' if label else ''}: {_s[:110]}"
                         )
                         await _aio.sleep(1.5)
