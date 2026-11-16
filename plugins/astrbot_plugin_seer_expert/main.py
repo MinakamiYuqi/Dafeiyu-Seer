@@ -4109,6 +4109,12 @@ class SeerExpertPlugin(Star):
         with open(path, "wb") as f:
             f.write(data)
         _sent = await self._send_image(event, path, "配置图")
+        # 2026-11-17：这张图只发一次，发完删掉。
+        # 原来从不清理，%TEMP% 里攒了 90 个 / 88 MB（从 11-09 开始）。
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
         # 记住这次用的参数，供后续增量修改
         try:
             _key = str(getattr(event, "unified_msg_origin", "") or "default")
@@ -4438,6 +4444,11 @@ class SeerExpertPlugin(Star):
             f.write(data)
 
         _sent = await self._send_image(event, path, "配置图")
+        # 2026-11-17：发完删掉临时图（原来从不清理，%TEMP% 里攒了几十 MB）
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
         self._config_cache[_key] = cur
         _six = " / ".join(f"{b['cn']}{b['value']}" for b in view.get("battle") or [])
@@ -5967,8 +5978,13 @@ class SeerExpertPlugin(Star):
         with open(path, "wb") as f:
             f.write(data)
 
-        # 2026-11-17：统一走 _send_image —— 测试期间改发私聊，不在群里刷图
+        # 2026-11-17：统一走 _send_image
         sent = await self._send_image(event, path, "榜单图")
+        # 发完删掉临时图（原来从不清理）
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
         # 文字部分：只报状态，不重复图里的内容
         total = sum(len(v) for v in resolved.values())
