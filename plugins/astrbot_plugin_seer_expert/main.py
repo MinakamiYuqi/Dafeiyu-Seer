@@ -2280,75 +2280,17 @@ class SeerExpertPlugin(Star):
                 _nm = str(r.get("name") or "")
                 if _nm and _nm not in _seen:
                     _seen[_nm] = r
-
-            def _fmt_vals(v: dict) -> str:
-                if not v:
-                    return "（无数值）"
-                names = (("atk", "攻击"), ("def", "防御"), ("sp_atk", "特攻"),
-                         ("sp_def", "特防"), ("spd", "速度"), ("hp", "体力"))
-                return "，".join(f"{cn}{int(v[k])}" for k, cn in names if int(v.get(k) or 0))
-
-            lines = [f"【刻印·{kw}（系列，共 {len(_seen)} 种）】"]
-            # ★ 2026-11-17 定稿：方向按【系列内排名】判，不用绝对阈值。
-            #   鱼片指出两处错：
-            #     ① 爆体也要分物攻/特攻（赑屃 atk47/hp135 物攻爆体、狻猊 sp_atk47/hp135 特攻爆体）
-            #     ② 囚牛 atk60/spd45 在这个系列里是【爆速】—— spd45 是全系列第 1
-            #   所以列出「排名前 2 的项」作为方向标签，不做单一归类。
-            _KEYS = (("atk", "攻"), ("def", "防"), ("sp_atk", "特攻"),
-                     ("sp_def", "特防"), ("spd", "速"), ("hp", "体"))
-
-            def _rank_map() -> dict:
-                """每一项在系列内的排名（1 最高，并列取同rank）。"""
-                out = {}
-                for k, _ in _KEYS:
-                    vals = sorted((int((r.get("vals") or {}).get(k) or 0)
-                                   for r in _seen.values()), reverse=True)
-                    out[k] = vals
-                return out
-
-            _rank_cache = _rank_map()
-
-            def _rk(v: dict, k: str) -> int:
-                x = int(v.get(k) or 0)
-                if x <= 0:
-                    return 99
-                arr = _rank_cache[k]
-                try:
-                    return arr.index(x) + 1
-                except ValueError:
-                    return 99
-
-            def _dir_of(v: dict) -> str:
-                """方向标签 = 排名前 2 的项；体力第 1 时额外带攻项，区分物攻体/特攻体。
-
-                鱼片 2026-11-17 指出的两点：
-                  ① 爆体也要分物攻/特攻 —— 赑屃（体1+攻4）≠ 狻猊（体1+特攻4）
-                  ② 囚牛 spd45 是系列最高档 = 爆速，要单独标出来
-                """
-                tags = []
-                for k, cn in _KEYS:
-                    if _rk(v, k) <= 2:
-                        tags.append(f"{cn}{_rk(v, k)}")
-
-                # 体力第 1 时，攻项排名再高也补进来（否则爆体分不出物攻/特攻）
-                if _rk(v, "hp") == 1:
-                    for k, cn in (("atk", "攻"), ("sp_atk", "特攻")):
-                        r = _rk(v, k)
-                        if r <= 8 and f"{cn}{r}" not in tags:
-                            tags.append(f"{cn}{r}")
-                            break          # 只补主攻那项
-
-                return "·".join(tags) if tags else "均衡"
-
+            lines = [f"【刻印·{kw}（系列 {len(_seen)} 种）】"]
             for _nm, r in sorted(_seen.items()):
                 _v = r.get("vals") or {}
+                _txt = "，".join(
+                    f"{cn}{int(_v.get(k) or 0)}"
+                    for k, cn in (("atk", "攻"), ("def", "防"), ("sp_atk", "特攻"),
+                                  ("sp_def", "特防"), ("spd", "速"), ("hp", "体"))
+                    if int(_v.get(k) or 0)
+                )
                 _tot = sum(int(x or 0) for x in _v.values())
-                lines.append(f"- {_nm}（{_dir_of(_v)}）：{_fmt_vals(_v)}｜合计 {_tot}")
-            lines.append("")
-            lines.append(
-                "选哪条看精灵流派：物攻向配 atk 高的、特攻向配 sp_atk 高的、"
-                "爆体配 hp 高的。**不确定就把精灵名带上重问（pet=精灵名）**，会按流派自动挑。"
-            )
+                lines.append(f"- {_nm}：{_txt or '无数值'}｜{_tot}")
             return "\n".join(lines)
 
         # ① 手册优先：MintMark 含 BaseAttriValue / MaxAttriValue / ExtraAttriValue
