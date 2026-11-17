@@ -82,3 +82,46 @@ def test_build_respects_explicit_params(k):
     # 不传时应该回落到 pet_build 的记录（无为觉者存的是晨曦/神话/AH）
     v2 = k.build_view("无为觉者", "爆攻")
     assert v2.get("suit") and v2.get("suit") != "圣芒", "不传时应回落到表里的配装"
+
+
+def test_mint_uses_pet_build(k):
+    """seer_mint 不传 preset 时，必须给出 pet_build 表里手工调过的配装。
+
+    2026-11-17 加的。鱼片指出「这些魂印派生规则都已经在里面了」——
+    确实，pet_build 里这几只的配装全是手工调过的，而且调得非常细：
+
+      无极圣武   瓏·寅勇×2 + 星辉·相伴    二角攻体，拉大双攻差（英雄之耀吃这个）
+      镇世玄武   刑天·威临×2 + 信仰       双防 65/65（魂印双防15%转化）
+      无为觉者   螭吻×2 + 帝皇·无极       三件都要总和 310（不看单项）
+      天堂极龙兽  创造×2 + 赑屃           体力 135 档
+
+    mint_view 原来压根不读这张表，用 PRESET_MINTS 硬编码 + 默认爆体，
+    结果南霜/无极/玄武全给了「创造×2+赑屃」—— 跟这只精灵是谁没关系。
+
+    这个测试**不硬编码期望值**，而是从 pet_build 动态读出来对比，
+    这样表里改了配装，测试自动跟着走。
+    """
+    PETS = ("无为觉者", "无极圣武", "镇世神岳·玄武", "天堂极龙兽", "不破帝·南霜")
+    checked = 0
+    for pet in PETS:
+        hits = k.find_pets(pet)
+        assert hits, f"{pet} 查不到"
+        b = k.pet_build(hits[0][0]) or {}
+        raw = b.get("mints")
+        if isinstance(raw, (list, tuple)):
+            auth = [str(x).strip() for x in raw if str(x).strip()]
+        else:
+            auth = [x.strip() for x in str(raw or "").split(",") if x.strip()]
+        if not auth:
+            continue
+
+        v = k.mint_view(pet)
+        got = [str(x) for x in (v.get("mints") or [])]
+        assert got == auth[:3], (
+            f"{pet}（pid={hits[0][0]}）的刻印和 pet_build 不一致：\n"
+            f"  pet_build 权威: {auth[:3]}\n"
+            f"  mint_view 实际: {got}"
+        )
+        checked += 1
+
+    assert checked >= 4, f"只对比了 {checked} 只，太少了"
