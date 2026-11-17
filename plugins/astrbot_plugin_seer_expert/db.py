@@ -1595,8 +1595,10 @@ class SeerKnowledge:
                 "mints": names[:limit],
                 "preset": want,
                 "note": (
-                    f"种族 攻{atk}/特攻{spa} → {dir_cn}；"
-                    "魂印吃六项之和（均分型）→ 按**总和**挑刻印，"
+                    (f"种族 攻{atk}/特攻{spa}（魂印拉平型，判不出流派）；"
+                     if not atk and not spa
+                     else f"种族 攻{atk}/特攻{spa} → {dir_cn}；")
+                    + "魂印吃六项之和 → 按**总和**挑刻印，"
                     "同系列最多 2 个，所以「总和最高×2 + 次高」"
                 ),
                 "eat_sum": True,
