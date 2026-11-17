@@ -904,6 +904,13 @@ class SeerKnowledge:
         },
         "双刃": {
             "dual":     ["圣战之无限α", "圣战之无限α", "穹明拾光"],
+            # ★ 2026-11-18：吃「六项之和」的魂印（无为觉者「所有能力值变为总和的一半」）
+            #   按总和挑才是对的。实测全库总和最高两档：
+            #     赤洲龙子·螭吻 310（攻55 防40 特攻55 特防40 速0 体120）
+            #     帝皇·无极     310（攻50 防50 特攻50 特防50 速0 体110）
+            #   同系列最多 2 个 → 螭吻×2 + 无极。
+            #   原来给的双刃方案是 圣战之无限α(263)+穹明拾光(255)，总和差 55。
+            "average":  ["赤洲龙子·螭吻", "赤洲龙子·螭吻", "帝皇·无极"],
         },
     }
 
@@ -1567,6 +1574,35 @@ class SeerKnowledge:
         #   修罗铠甲（技能词条「双攻值之和」）本该吃双刃印，却拿到物攻方案。
         if not preset and style == "dual":
             want = "双刃"
+
+        # ★ 2026-11-18：吃「六项之和」的魂印精灵，按总和挑刻印。
+        #   鱼片指出：无为觉者这类「所有能力值变为总和的一半」的精灵，
+        #   310 的双攻刻印（螭吻 / 帝皇·无极）才是最优，按单维度挑就挑不到。
+        _eat_sum = False
+        try:
+            _sm = self.detect_soulmod(petname) or {}
+            _eat_sum = bool(_sm.get("average"))
+        except Exception:  # noqa: BLE001
+            _eat_sum = False
+        if _eat_sum:
+            want = "双刃"
+            variants = self.PRESET_MINTS.get("双刃", {})
+            names = list(variants.get("average") or [])
+            view.update({
+                "found": True, "name": petname, "pid": pid,
+                "style": style,
+                "dir_cn": dir_cn,
+                "mints": names[:limit],
+                "preset": want,
+                "note": (
+                    f"种族 攻{atk}/特攻{spa} → {dir_cn}；"
+                    "魂印吃六项之和（均分型）→ 按**总和**挑刻印，"
+                    "同系列最多 2 个，所以「总和最高×2 + 次高」"
+                ),
+                "eat_sum": True,
+            })
+            return view
+
         variants = self.PRESET_MINTS.get(want, {})
         names = (variants.get(style) or variants.get("physical")
                  or variants.get("special") or variants.get("dual") or [])
