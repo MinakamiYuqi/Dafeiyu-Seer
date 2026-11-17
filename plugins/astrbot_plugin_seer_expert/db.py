@@ -1349,7 +1349,7 @@ class SeerKnowledge:
     def build_view(
         self,
         name: str,
-        preset: str = "爆攻",
+        preset: str = "爆体",
         *,
         vs: str = "",
         talent: int = 31,
@@ -1372,7 +1372,7 @@ class SeerKnowledge:
         }
         # ★ 先过一遍别名（爆速→高速 / 物攻→爆攻 …），空值回落默认爆攻
         _p = str(preset or "").strip()
-        _p = self.PRESET_ALIAS.get(_p, _p) or "爆攻"
+        _p = self.PRESET_ALIAS.get(_p, _p) or "爆体"
         if _p not in self.PRESET_MINTS:
             view["empty_hint"] = (
                 f"预设没有「{preset}」。可选：{' / '.join(self.PRESET_MINTS)}"
@@ -1549,7 +1549,7 @@ class SeerKnowledge:
             style = "dual" if (abs(atk - spa) <= 10 and min(atk, spa) > 0) else (
                 "physical" if atk >= spa else "special")
         dir_cn = {"physical": "物攻向", "special": "特攻向", "dual": "双攻向"}[style]
-        want = preset or "爆攻"
+        want = preset or "爆体"
         # ★ 双攻型默认走「双刃」预设（2026-11-06 补）
         #   "爆攻"/"爆体"/"爆盾"/"高速" 都只有 physical/special 两档，
         #   双攻型精灵会 fallback 到 physical，等于给它配了单攻印 ——

@@ -3430,7 +3430,7 @@ class SeerExpertPlugin(Star):
         self,
         event: AstrMessageEvent,
         name: str,
-        preset: str = "爆攻",
+        preset: str = "爆体",
         vs: str = "",
         talent: int = 31,
         nature: str = "",
@@ -3442,7 +3442,7 @@ class SeerExpertPlugin(Star):
 
         Args:
             name(string): 精灵名
-            preset(string): 预设，可选 爆攻 / 爆体 / 爆盾 / 高速
+            preset(string): 预设，可选 爆攻 / 爆体（默认）/ 爆盾 / 高速
             vs(string): 对线特化。留空=通用；phys=极限抗物理；spec=极限抗特殊
             talent(int): 天赋，满个体 31
             nature(string): 性格。留空按预设自动选（物攻向爆攻=固执、爆盾=顽皮等）
@@ -3497,13 +3497,13 @@ class SeerExpertPlugin(Star):
         self,
         event: AstrMessageEvent,
         name: str,
-        preset: str = "爆攻",
+        preset: str = "爆体",
     ) -> str:
         """刻印推荐：按精灵种族自动判流派，给三刻印方案（同系列最多 2 个）。
 
         Args:
             name(string): 精灵名
-            preset(string): 方向预设，可选 爆攻 / 爆体 / 爆盾 / 高速
+            preset(string): 方向预设，可选 爆攻 / 爆体（默认）/ 爆盾 / 高速
         """
         _miss = self._db_missing()
         if _miss:
@@ -3741,7 +3741,7 @@ class SeerExpertPlugin(Star):
 群友要「配置图」「面板图」「配装图」用这个；要看群友**投稿的截图**用 seer_player_config；
 只看六项数值用 seer_stat（快得多）；**不要用 gemini 那类图像生成工具**（会画出立绘）。
 
-**只有 name 是必填**，其余留空都会自动推：preset→爆攻 / nature→按流派 / ev→按预设 /
+**只有 name 是必填**，其余留空都会自动推：preset→爆体 / nature→按流派 / ev→按预设 /
 mints→推荐三件 / team_skip→按种族判 / soulmod→从魂印原文识别。
 群友明确说了某项（「开朗性格」「刻印用九天攻」「体力刷到1100」）才传对应参数。
 
@@ -3760,7 +3760,7 @@ mints→推荐三件 / team_skip→按种族判 / soulmod→从魂印原文识�
 
 Args:
         name(string): 精灵名
-        preset(string): 配装预设（爆攻/爆体/爆盾/高速），留空默认爆攻
+        preset(string): 配装预设（爆攻/爆体/爆盾/高速），留空默认爆体
         nature(string): 性格。留空按流派选（物攻=固执 / 特攻=保守 / 双攻=坦率 / 爆盾=顽皮）
         ev(string): 学习力，两种写法：
             "atk=254,hp=252,spd=4"                    直接给点数
@@ -3964,7 +3964,7 @@ Args:
         # ★ 缺省自动补全（2026-11-03：之前 LLM 不传 nature/ev/mints 时，
         #   图上就是「性格没选 + 学习力空 + 没刻印」，它只能一口气试好几版才凑对。\n        #   （2026-11-16 起：性格空着会自动填一个真实且符合流派的，不再显示虚构名字）
         #   现在缺什么就按流派自动补，一次出对。）
-        _preset = str(preset or "").strip() or "爆攻"     # 留空默认爆攻（最常见）
+        _preset = str(preset or "").strip() or "爆体"     # 留空默认爆体（更通用，2026-11-18 改）
         _own = self.kb.pet_build(name) or {}               # 专属配装（用于对比/说明）
         b = self.kb.build_view(name, _preset, nature=nature, ev=ev,
                                suit=suit, title=title, eye=eye, talent=talent)
