@@ -1158,7 +1158,7 @@ def lookup_mintmark(name: str) -> dict:
     """
     # 先试简称解析
     try:
-        sys.path.insert(0, os.path.join(HERE, "..", "tools"))
+        sys.path.insert(0, HERE)   # ★ 2026-11-17：mint_picker.py 已收进 seer-cli/，不再依赖仓库外的 tools/
         import mint_picker as _mp
         _all = _mp.load_mintmarks()
         hit = _mp.resolve_mint(name, _all)
@@ -1817,7 +1817,7 @@ def cmd_mintmark(k: Any, args) -> None:
     #    ★ 必须排在 lookup_mintmark 之前 —— 它的 like 模糊匹配会把
     #      "v8" 吃成 V8-01、"圣战" 吃成圣战之巅（不分进阶、不加优先级）。
     try:
-        sys.path.insert(0, os.path.join(HERE, "..", "tools"))
+        sys.path.insert(0, HERE)   # ★ 2026-11-17：mint_picker.py 已收进 seer-cli/，不再依赖仓库外的 tools/
         import mint_picker as _mp
         _alls = _mp.load_mintmarks()
         hit = _mp.resolve_mint(q, _alls)
@@ -1906,7 +1906,7 @@ def cmd_mintmark(k: Any, args) -> None:
 
 def cmd_mint(k: Any, args) -> None:
     """刻印推荐：按精灵种族自动判流派，给三刻印方案（同系列最多 2 个）。"""
-    sys.path.insert(0, os.path.join(HERE, "..", "tools"))
+    sys.path.insert(0, HERE)   # ★ 2026-11-17：mint_picker.py 已收进 seer-cli/，不再依赖仓库外的 tools/
     import mint_picker as mp
 
     hits = k.find_pets(args.name)
