@@ -1358,6 +1358,7 @@ class SeerKnowledge:
         suit: str = "",
         title: str = "",
         eye: str = "",
+        team_skip: str = "",
     ) -> dict[str, Any]:
         """一键配装：按预设选三刻印 + 算最终面板。
 
@@ -1404,7 +1405,10 @@ class SeerKnowledge:
             view["suit"] = suit or _own.get("suit") or ""
             view["title"] = title or _own.get("title") or ""
             view["eye"] = eye or _own.get("eye") or ""
-            view["team_skip"] = _own.get("team_skip") or ""
+            # ★ 2026-11-18：优先级改成「调用方传入 > pet_build 表里沉淀的 > 空」。
+            #   原来只认表里的，导致 seer_build 的自动推断传不进来，
+            #   和 seer_config_card 算出来的面板差 15（坑 25 的实例）。
+            view["team_skip"] = str(team_skip or "").strip() or (_own.get("team_skip") or "")
             view["soulmod"] = _own.get("soulmod") or ""
             _evs = str(_own.get("ev") or "").strip()
             # ★ 2026-11-04：pet_build 的 ev 支持「目标面板值」写法
@@ -1511,9 +1515,16 @@ class SeerKnowledge:
         view["ev_note"] = ev_note
         view["atk_base"] = atk
         view["spa_base"] = spa
+        # ★ 2026-11-18：通用分支也要接 team_skip。
+        #   上一版只改了专属分支（pet_build 有记录时走那条），
+        #   谱尼/雷伊这类没记录的走通用分支，stat_view 根本没收到这个参数，
+        #   于是 seer_build 比 seer_config_card 多算 15 点战队加成。
+        _ts = str(team_skip or "").strip() or view.get("team_skip") or ""
+        view["team_skip"] = _ts
         view["stat"] = self.stat_view(
             petname, talent=talent, nature=nat, ev=ev,
             mints=list(names or []), suit=suit, title=title, eye=eye,
+            team_skip=_ts,
         )
         return view
 
