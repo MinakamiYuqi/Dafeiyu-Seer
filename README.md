@@ -728,8 +728,6 @@ https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/astrbot_pl
 - 配置图对「宝石绑到不存在的技能」静默通过（只有 tweak 会拦）
 - `seer_pet` 里「专属效果」和「魂印里提到的专属效果」两行整段重复
 - 显式传方向（如爆攻）会覆盖专属配装，但回执不说 → 现在会提示「表里另有专属配装」
-- 空留言板也会触发「去读留言板」（清空板子同样改 mtime）
-- 待验项判据的正则太严：标题写成「## 当前待验项（1 条）」时整节匹配不到
 
 **seer-cli 自包含**
 
