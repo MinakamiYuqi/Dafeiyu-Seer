@@ -3167,18 +3167,36 @@ class SeerExpertPlugin(Star):
                         L = io.open(fp, encoding="utf-8", errors="replace").read().split("\n")
                     except OSError:
                         continue
-                    # ★ 先标出哪些行在 docstring 里 —— 三引号计数，奇数为内部。
-                    #   bot 实测会误报：render_card.py 的 docstring 正文里
-                    #   写着一个带括号的函数名，那是说明不是调用。
-                    _in_doc: list[bool] = []
-                    _q = 0
-                    for _ln in L:
-                        _cnt = _ln.count('"""')
-                        if _cnt:
-                            _in_doc.append(True)              # 三引号所在行本身也算
-                            _q += _cnt
-                        else:
-                            _in_doc.append(_q % 2 == 1)
+                    # ★ 标出哪些行在 docstring 里，避免把「说明文字里提到的函数名」
+                    #   当成调用。但**不能用三引号计数** —— main.py 里三引号出现
+                    #   奇数次（有字符串内嵌），一跑偏就是 49% 的行被误判，
+                    #   L2400 之后的调用全被跳过（bot 2026-11-18 实测报的）。
+                    #   改用 ast 精确取每个 docstring 的 [起, 止] 行号。
+                    _in_doc: list[bool] = [False] * len(L)
+                    try:
+                        import ast as _ast
+
+                        _tree = _ast.parse("\n".join(L))
+                        for _node in _ast.walk(_tree):
+                            if not isinstance(_node, (
+                                    _ast.Module, _ast.FunctionDef,
+                                    _ast.AsyncFunctionDef, _ast.ClassDef)):
+                                continue
+                            _body = getattr(_node, "body", None) or []
+                            if not _body:
+                                continue
+                            _first = _body[0]
+                            if not (isinstance(_first, _ast.Expr)
+                                    and isinstance(getattr(_first, "value", None),
+                                                   _ast.Constant)
+                                    and isinstance(_first.value.value, str)):
+                                continue
+                            _lo = getattr(_first, "lineno", 0)
+                            _hi = getattr(_first, "end_lineno", _lo)
+                            for _k in range(_lo - 1, min(_hi, len(L))):
+                                _in_doc[_k] = True
+                    except (SyntaxError, ValueError):
+                        _in_doc = [False] * len(L)         # 解析不了就不过滤，宁可多报
 
                     for i, ln in enumerate(L):
                         if not call_re.search(ln):
@@ -4578,11 +4596,22 @@ Args:
 
         self._config_cache[_key] = cur
         _six = " / ".join(f"{b['cn']}{b['value']}" for b in view.get("battle") or [])
+        # ★ 2026-11-18：把 view 里的宝石绑定警告带出来。
+        #   bot 实测：db.py 早就在 warn 字段里记了「技能库里没有这个名字」，
+        #   但 tweak 组装回执时压根不读它，警告一句也到不了用户眼前。
+        #   ★ 两个位置都踩过：
+        #     插在 return 之后 → 只有发图失败才走到，正常出图看不到；
+        #     插进 applied → 会夹在句子中间「xxx；⚠ … 重新出图」，读着别扭。
+        #   现在是回执末尾独立成句。
+        _gw = [w for w in (view.get("warn") or []) if "宝石" in str(w)]
+        _gw_txt = ("\n⚠ " + "\n⚠ ".join(str(w) for w in _gw)) if _gw else ""
+
         _done = "；".join(applied) if applied else "没有识别到有效修改"
         _bad = ("　未识别：" + "、".join(failed)) if failed else ""
         if _sent:
-            return f"（已按 {_done} 重新出图。六项：{_six}{_bad}）"
-        return f"改完了但发送失败。{_done}。六项：{_six}{_bad}"
+            return f"（已按 {_done} 重新出图。六项：{_six}{_bad}）{_gw_txt}"
+
+        return f"改完了但发送失败。{_done}。六项：{_six}{_bad}{_gw_txt}"
 
     @llm_tool(name="seer_stat")
     async def seer_stat(
