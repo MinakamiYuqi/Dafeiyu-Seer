@@ -2359,6 +2359,30 @@ class SeerExpertPlugin(Star):
                 )
                 _tot = sum(int(x or 0) for x in _v.values())
                 lines.append(f"- {_nm}：{_txt or '无数值'}｜{_tot}")
+            # ★ 2026-11-18：bot 报过「单行格式只剩一版，玩家想找物攻/特攻的另一版
+            #   会不知道还存在」。成对的刻印（一个 atk 有值、一个 sp_atk 有值、
+            #   数值还一样）就是同一系列的物攻版/特攻版，末尾统一说一句，
+            #   比每条都带尾巴省字（9 条 × 12 字 vs 一句话）。
+            _pairs = []
+            _by_vals = {}
+            for _nm2, _r2 in _seen.items():
+                _v2 = _r2.get("vals") or {}
+                _key = (int(_v2.get("def") or 0), int(_v2.get("sp_def") or 0),
+                        int(_v2.get("spd") or 0), int(_v2.get("hp") or 0))
+                _by_vals.setdefault(_key, []).append(
+                    (_nm2, int(_v2.get("atk") or 0), int(_v2.get("sp_atk") or 0)))
+            for _k2, _grp in _by_vals.items():
+                if len(_grp) != 2:
+                    continue
+                (_n1, _a1, _s1), (_n2, _a2, _s2) = _grp
+                if _a1 and _s2 and not _s1 and not _a2:
+                    _pairs.append((_n1, _n2))
+                elif _a2 and _s1 and not _s1 is None and not _a1:
+                    _pairs.append((_n2, _n1))
+            if _pairs:
+                _ptxt = "、".join(f"{a}（物攻）↔ {b}（特攻）" for a, b in _pairs)
+                lines.append("")
+                lines.append(f"※ 成对的是同一系列的物攻版/特攻版，按精灵流派选：{_ptxt}")
             return "\n".join(lines)
 
         # ① 手册优先：MintMark 含 BaseAttriValue / MaxAttriValue / ExtraAttriValue
