@@ -88,6 +88,7 @@ import logging
 import ast
 import os
 import re
+import shutil
 import sqlite3
 import threading
 import time
@@ -114,6 +115,9 @@ class SeerKnowledge:
         # Windows 下持有句柄会导致它写入失败（PermissionError）。
         self._seer = None
         os.makedirs(os.path.dirname(kb_db_path), exist_ok=True)
+        # ★ 2026-11-17：首次安装时用随包的 kb_seed.sqlite 初始化知识库。
+        #   必须在连库之前做，否则会先建出一个空库、种子就再也进不去了。
+        self._bootstrap_kb_from_seed(kb_db_path)
         self._lock = threading.RLock()
         self._kb_path = kb_db_path
         self._kb = sqlite3.connect(kb_db_path, check_same_thread=False)
@@ -161,6 +165,30 @@ class SeerKnowledge:
             """
         )
         self._kb.commit()
+
+    def _bootstrap_kb_from_seed(self, kb_db_path: str) -> None:
+        """首次安装：把随包带的 kb_seed.sqlite 复制成 kb.sqlite。
+
+        ★ 只在目标库不存在时复制 —— **绝不覆盖**。
+          使用者群里积累的 facts 是他自己的资产，升级插件不能动它。
+        ★ 为什么需要：知识库（1495 条玩家结论 / 322 条文档规则 / 必先等级表）
+          以前从没随包发布，别人装完这些查询全是空的。
+        """
+        if not kb_db_path or os.path.isfile(kb_db_path):
+            return
+        here = os.path.dirname(os.path.abspath(__file__))
+        for name in ("kb_seed.sqlite", "kb.sqlite.seed"):
+            seed = os.path.join(here, name)
+            if not os.path.isfile(seed):
+                continue
+            try:
+                os.makedirs(os.path.dirname(kb_db_path), exist_ok=True)
+                shutil.copy2(seed, kb_db_path)
+                logger.info("[赛尔] 已用随包种子初始化知识库：%s（%.1f MB）",
+                            name, os.path.getsize(kb_db_path) / 1048576)
+            except OSError as exc:  # noqa: BLE001
+                logger.warning("[赛尔] 复制种子知识库失败（插件仍可运行，只是知识库为空）：%s", exc)
+            return
 
     # ---------------- 备份保护 ----------------
     #
