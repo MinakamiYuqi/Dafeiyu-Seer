@@ -713,7 +713,7 @@ https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/astrbot_pl
 
 ### 2026-11-17 · v1.1.1
 
-**⚠️ Release 包已重打（含知识库）** —— v1.0.0 / v1.1.0 的包里**没有知识库**，
+**⚠️ Release 包已重打（含知识库）** —— 以前那几个包**没有知识库**（旧版已下架），
 装上去之后 `facts`（玩家结论）、`doc_rules`、`articles`、`pet_alias`、`first_move_rank`
 全是空的：问机制查不到、问先手判不出、问俗称认不得。
 
