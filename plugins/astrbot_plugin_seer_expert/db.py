@@ -2681,12 +2681,41 @@ class SeerKnowledge:
             _gname = _gname.strip()
             _info = self.lookup_gem(_gname) if hasattr(self, "lookup_gem") else {}
             _lvl = int(_info.get("level") or 0)
+            # ★ 2026-11-18：校验 @ 后面的技能是不是这只精灵的。
+            #   bot 实测「gem1=威力宝石Lv8@九曲之光」（刻印名）和
+            #   「gem1=威力宝石Lv8@丧月之夜」（谱尼没这技能）都静默通过，
+            #   图上就画成「绑定技能 → 九曲之光」这种错的东西。
+            _sk = _skill.strip()
+            if _sk:
+                try:
+                    _own = self._q(
+                        "select count(*) from skill s "
+                        "join skillinpetorm l on l.skill_id = s.id "
+                        "join pet p on p.id = l.pet_id "
+                        "where p.id = (select id from pet where name=? limit 1) "
+                        "and s.name = ?", (petname, _sk))
+                    _own_n = int(_own[0][0]) if _own else 0
+                    if _own_n == 0:
+                        _exists = self._q(
+                            "select count(*) from skill where name=?", (_sk,))
+                        _ex_n = int(_exists[0][0]) if _exists else 0
+                        if _ex_n == 0:
+                            view["warn"].append(
+                                f"宝石绑定「{_sk}」：技能库里没有这个名字"
+                                f"（@ 后面要填技能名，不是刻印名）")
+                        else:
+                            view["warn"].append(
+                                f"宝石绑定「{_sk}」不是{petname}的技能，"
+                                f"图上仍会显示但这只精灵用不到")
+                except Exception:  # noqa: BLE001
+                    pass
+
             _gems.append({
                 "raw": _s,
                 "id": _info.get("id"),
                 "name": _info.get("name") or _gname,
                 "effect": _info.get("desc") or "",
-                "skill": _skill.strip(),
+                "skill": _sk,
                 # 2026-11-16：图上要画「菱形 + 等级罗马数字」，等级从名字里拿不到
                 #   （「威力宝石Lv7」这种能，但「护罩回溯宝石V」用的是罗马数字），
                 #   所以直接用库里的 level 字段。
