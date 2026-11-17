@@ -2264,6 +2264,75 @@ class SeerExpertPlugin(Star):
             except Exception:
                 _pet_style = ""
 
+        # ①-b ★ 2026-11-17：先判「这是不是系列名」。
+        #   bot 报过：查「赤洲龙子」只出 5 条，实际有 9 个名字（18 条含两版本），
+        #   漏了赑屃/狴犴/负屃/螭吻 —— 因为下面那句 limit 硬编码 5。
+        #   群友说「一龙子」时想知道**这个系列有哪几种**，少列等于砍掉一半选择，
+        #   所以系列走单独分支：全列，按名字去重，每条只给一行摘要。
+        _series_rows = []
+        try:
+            _series_rows = self.kb.mint_series(kw)
+        except Exception:  # noqa: BLE001
+            _series_rows = []
+        if len({r.get("name") for r in _series_rows}) >= 4:      # ≥4 个不同名字才算「系列」
+            _seen = {}
+            for r in _series_rows:
+                _nm = str(r.get("name") or "")
+                if _nm and _nm not in _seen:
+                    _seen[_nm] = r
+
+            def _fmt_vals(v: dict) -> str:
+                if not v:
+                    return "（无数值）"
+                names = (("atk", "攻击"), ("def", "防御"), ("sp_atk", "特攻"),
+                         ("sp_def", "特防"), ("spd", "速度"), ("hp", "体力"))
+                return "，".join(f"{cn}{int(v[k])}" for k, cn in names if int(v.get(k) or 0))
+
+            lines = [f"【刻印·{kw}（系列，共 {len(_seen)} 种）】"]
+            def _dir_of(v: dict) -> str:
+                """按分布判方向 —— 不能用 max()，因为 hp 通常最高会全判成爆体。"""
+                g = lambda k: int(v.get(k) or 0)
+                atk, sp_atk, hp = g("atk"), g("sp_atk"), g("hp")
+                de, sd, spd = g("def"), g("sp_def"), g("spd")
+
+                # ★ 先判爆体：体力远超攻击项时，哪怕 atk/sp_atk 也有值
+                #   （赑屃 atk47/hp135、狻猊 sp_atk47/hp135 都属于这类），
+                #   否则会被下面的攻向规则先截走。
+                if hp >= 120 and hp >= max(atk, sp_atk) * 2.5:
+                    return "爆体"
+
+                # 攻向用相对比较（atk vs sp_atk），阈值 40 是因为
+                # 小数值系列里 60 就已经是主力项了（囚牛 atk60 / 睚眦 sp_atk60）。
+                if atk >= 40 and atk >= sp_atk * 1.8:
+                    return "物攻向"
+                if sp_atk >= 40 and sp_atk >= atk * 1.8:
+                    return "特攻向"
+                if atk >= 45 and sp_atk >= 45:
+                    return "双攻向"
+                # 再判防御 / 体力 / 速度
+                if de >= 55 and sd >= 55:
+                    return "双防向"
+                if de >= 55 and de > sd * 1.5:
+                    return "物防向"
+                if sd >= 55 and sd > de * 1.5:
+                    return "特防向"
+                if hp >= 130:
+                    return "爆体"
+                if spd >= 40 and spd >= de and spd >= sd:
+                    return "速度向"
+                return "均衡"
+
+            for _nm, r in sorted(_seen.items()):
+                _v = r.get("vals") or {}
+                _tot = sum(int(x or 0) for x in _v.values())
+                lines.append(f"- {_nm}（{_dir_of(_v)}）：{_fmt_vals(_v)}｜合计 {_tot}")
+            lines.append("")
+            lines.append(
+                "选哪条看精灵流派：物攻向配 atk 高的、特攻向配 sp_atk 高的、"
+                "爆体配 hp 高的。**不确定就把精灵名带上重问（pet=精灵名）**，会按流派自动挑。"
+            )
+            return "\n".join(lines)
+
         # ① 手册优先：MintMark 含 BaseAttriValue / MaxAttriValue / ExtraAttriValue
         manual = []
         try:
