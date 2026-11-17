@@ -1384,12 +1384,15 @@ class SeerExpertPlugin(Star):
                        detail: str = "") -> str:
         """查询赛尔号精灵资料：属性、种族值、魂印、主要技能、图鉴简介。
 
-        默认只列技能名 + 威力/PP。**想连技能效果一起看，传 detail="skills"** ——
-        省得再逐个调 seer_skill（那只精灵有 5 个技能就是 5 次调用）。
+        默认只列技能名 + 威力/PP。**要更多就传 detail** —— 省得再逐个调别的工具：
+        · detail="skills"   附带每个技能的属性和效果（原来是逐个 seer_skill，5 个技能 5 次）
+        · detail="moveset"  附带配招参考（原来要再调一次 seer_moveset）
+        · detail="all"      上面两样都要
 
         Args:
             name(string): 精灵名，支持简称与模糊匹配，如「环源」「北鸟」
-            detail(string): 留空=现在这样；"skills"=附带每个技能的属性和效果（精简版）
+            detail(string): 留空=只列技能名；"skills"=加技能详情；
+                "moveset"=加配招参考；"all"=两样都加
         """
         _miss = self._db_missing()
         if _miss:
@@ -1509,6 +1512,20 @@ class SeerExpertPlugin(Star):
             intro = self.kb.pet_intro(fpid)
             if intro:
                 lines.append("简介：" + intro[:80])
+
+        # ★ 2026-11-18：detail="moveset" / "all" 时把配招参考一起带上。
+        #   日志实测 seer_pet → seer_moveset 连调 3 次（反向也 3 次），
+        #   「配什么招」本来就是「这只精灵怎么样」的一部分。
+        #   seer_moveset 有 492 行（含配招模板规则），这里直接调它、不复制逻辑。
+        _scope = str(detail or "").strip().lower()
+        if _scope in ("moveset", "all"):
+            try:
+                _mv = await self.seer_moveset(event, name)
+            except Exception:  # noqa: BLE001
+                _mv = ""
+            if _mv and not str(_mv).startswith("未收录"):
+                lines.append(sep + "【配招参考】")
+                lines.append(str(_mv))
 
         raw = sep.join(lines)
         result = await self._learn_and_render(f"pet:{pid}", "pet", raw, event)
@@ -3619,6 +3636,7 @@ class SeerExpertPlugin(Star):
         suit: str = "",
         title: str = "",
         eye: str = "",
+        team_skip: str = "",
     ) -> str:
         """一键配装：按预设挑三刻印 + 算最终面板。群友问「给最好的爆攻是什么面板」用这个。
 
@@ -3632,14 +3650,28 @@ class SeerExpertPlugin(Star):
                 不用写全名）
             title(string): 称号名，如「神话」
             eye(string): 目镜名，如「漫游者-AH」
-                群里会以为两边数值对不上（2026-11-16 实测差 10 就是这个）。
+            team_skip(string): 战队不点的项（「攻击」「特攻」等）。留空按种族自动推断 ——
+                和 seer_config_card 用同一套判断，两边算出来的面板才一致
         """
         _miss = self._db_missing()
         if _miss:
             return _miss
+        # ★ 2026-11-18：战队跳过留空时按定位自动推断。
+        #   config_card 早就有这段（main.py:4135-4140），seer_build 没有 ——
+        #   结果同一只精灵两个工具算出来的攻击差 15（战队攻击加成）。
+        #   圣灵谱尼实测：build 285 / config_card 270。
+        #   坑 25 的老毛病：同一件事两个入口，一个有一个没有。
+        if not team_skip:
+            try:
+                _auto_skip = self.kb.suggest_team_skip(name, nature, "")
+            except Exception:  # noqa: BLE001
+                _auto_skip = ""
+            if _auto_skip:
+                team_skip = _auto_skip
+
         v = self.kb.build_view(
             name, preset, vs=vs, talent=talent, nature=nature,
-            suit=suit, title=title, eye=eye,
+            suit=suit, title=title, eye=eye, team_skip=team_skip,
         )
         if not v["found"]:
             return v.get("empty_hint") or f"配装失败：{name}"
