@@ -2289,38 +2289,56 @@ class SeerExpertPlugin(Star):
                 return "，".join(f"{cn}{int(v[k])}" for k, cn in names if int(v.get(k) or 0))
 
             lines = [f"【刻印·{kw}（系列，共 {len(_seen)} 种）】"]
+            # ★ 2026-11-17 定稿：方向按【系列内排名】判，不用绝对阈值。
+            #   鱼片指出两处错：
+            #     ① 爆体也要分物攻/特攻（赑屃 atk47/hp135 物攻爆体、狻猊 sp_atk47/hp135 特攻爆体）
+            #     ② 囚牛 atk60/spd45 在这个系列里是【爆速】—— spd45 是全系列第 1
+            #   所以列出「排名前 2 的项」作为方向标签，不做单一归类。
+            _KEYS = (("atk", "攻"), ("def", "防"), ("sp_atk", "特攻"),
+                     ("sp_def", "特防"), ("spd", "速"), ("hp", "体"))
+
+            def _rank_map() -> dict:
+                """每一项在系列内的排名（1 最高，并列取同rank）。"""
+                out = {}
+                for k, _ in _KEYS:
+                    vals = sorted((int((r.get("vals") or {}).get(k) or 0)
+                                   for r in _seen.values()), reverse=True)
+                    out[k] = vals
+                return out
+
+            _rank_cache = _rank_map()
+
+            def _rk(v: dict, k: str) -> int:
+                x = int(v.get(k) or 0)
+                if x <= 0:
+                    return 99
+                arr = _rank_cache[k]
+                try:
+                    return arr.index(x) + 1
+                except ValueError:
+                    return 99
+
             def _dir_of(v: dict) -> str:
-                """按分布判方向 —— 不能用 max()，因为 hp 通常最高会全判成爆体。"""
-                g = lambda k: int(v.get(k) or 0)
-                atk, sp_atk, hp = g("atk"), g("sp_atk"), g("hp")
-                de, sd, spd = g("def"), g("sp_def"), g("spd")
+                """方向标签 = 排名前 2 的项；体力第 1 时额外带攻项，区分物攻体/特攻体。
 
-                # ★ 先判爆体：体力远超攻击项时，哪怕 atk/sp_atk 也有值
-                #   （赑屃 atk47/hp135、狻猊 sp_atk47/hp135 都属于这类），
-                #   否则会被下面的攻向规则先截走。
-                if hp >= 120 and hp >= max(atk, sp_atk) * 2.5:
-                    return "爆体"
+                鱼片 2026-11-17 指出的两点：
+                  ① 爆体也要分物攻/特攻 —— 赑屃（体1+攻4）≠ 狻猊（体1+特攻4）
+                  ② 囚牛 spd45 是系列最高档 = 爆速，要单独标出来
+                """
+                tags = []
+                for k, cn in _KEYS:
+                    if _rk(v, k) <= 2:
+                        tags.append(f"{cn}{_rk(v, k)}")
 
-                # 攻向用相对比较（atk vs sp_atk），阈值 40 是因为
-                # 小数值系列里 60 就已经是主力项了（囚牛 atk60 / 睚眦 sp_atk60）。
-                if atk >= 40 and atk >= sp_atk * 1.8:
-                    return "物攻向"
-                if sp_atk >= 40 and sp_atk >= atk * 1.8:
-                    return "特攻向"
-                if atk >= 45 and sp_atk >= 45:
-                    return "双攻向"
-                # 再判防御 / 体力 / 速度
-                if de >= 55 and sd >= 55:
-                    return "双防向"
-                if de >= 55 and de > sd * 1.5:
-                    return "物防向"
-                if sd >= 55 and sd > de * 1.5:
-                    return "特防向"
-                if hp >= 130:
-                    return "爆体"
-                if spd >= 40 and spd >= de and spd >= sd:
-                    return "速度向"
-                return "均衡"
+                # 体力第 1 时，攻项排名再高也补进来（否则爆体分不出物攻/特攻）
+                if _rk(v, "hp") == 1:
+                    for k, cn in (("atk", "攻"), ("sp_atk", "特攻")):
+                        r = _rk(v, k)
+                        if r <= 8 and f"{cn}{r}" not in tags:
+                            tags.append(f"{cn}{r}")
+                            break          # 只补主攻那项
+
+                return "·".join(tags) if tags else "均衡"
 
             for _nm, r in sorted(_seen.items()):
                 _v = r.get("vals") or {}
