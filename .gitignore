@@ -42,3 +42,16 @@ desktop.ini
 
 # 插件打包产物（走 GitHub Releases，不进仓库）
 dist/
+
+# 开发维护文件与运行配置 —— 不进仓库（鱼片 2026-11-17 定）
+# docs/ 交接/工具清单/开发指南/留言板/踩坑档案
+# devtools/ 审计与同步脚本（本机工具）
+# data/ AstrBot 运行配置（cmd_config.json 含密码字段）+ 核心渲染模板
+docs/
+devtools/
+data/
+seer-cli/build_alias_overlay.py
+seer-cli/merge_local_aliases.py
+seer-cli/sdk_probe.py
+seer-cli/update_guard.py
+seer-cli/本次改动记录.md
