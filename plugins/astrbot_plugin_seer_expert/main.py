@@ -1380,11 +1380,16 @@ class SeerExpertPlugin(Star):
     # ---------------- 工具：精灵 ----------------
 
     @llm_tool(name="seer_pet")
-    async def seer_pet(self, event: AstrMessageEvent, name: str) -> str:
+    async def seer_pet(self, event: AstrMessageEvent, name: str,
+                       detail: str = "") -> str:
         """查询赛尔号精灵资料：属性、种族值、魂印、主要技能、图鉴简介。
+
+        默认只列技能名 + 威力/PP。**想连技能效果一起看，传 detail="skills"** ——
+        省得再逐个调 seer_skill（那只精灵有 5 个技能就是 5 次调用）。
 
         Args:
             name(string): 精灵名，支持简称与模糊匹配，如「环源」「北鸟」
+            detail(string): 留空=现在这样；"skills"=附带每个技能的属性和效果（精简版）
         """
         _miss = self._db_missing()
         if _miss:
@@ -1464,6 +1469,43 @@ class SeerExpertPlugin(Star):
                     for s in _rest
                 )
                 lines.append("技能（第五只带一个，一般带新）：" + brief)
+
+                # ★ 2026-11-18：detail="skills" 时把每个技能的本体一起带上。
+                #   bot 实测「查一只精灵要 8 次调用」（pet → moveset → skill×5 → soulmark），
+                #   主要原因就是技能效果得逐个查。这里一次性给齐，每条只留名字/属性/效果，
+                #   规则和术语注入跳过（那是 seer_skill 单查才有意义的东西）。
+                if str(detail or "").strip().lower() in ("skills", "all"):
+                    lines.append("")
+                    lines.append("各技能详情（精简版；要完整规则再 seer_skill 单个查）：")
+                    for _s in skills[:6]:
+                        _nm = str(_s.get("name") or "")
+                        if not _nm:
+                            continue
+                        try:
+                            _sv = self.kb.skill_view(_nm)
+                        except Exception:  # noqa: BLE001
+                            continue
+                        if not _sv.get("found"):
+                            continue
+                        _h = [f"【{_sv['name']}】{_sv['type']}系"]
+                        if _sv["power"]:
+                            _h.append(f"威{_sv['power']}")
+                        if _sv["pp"]:
+                            _h.append(f"PP{_sv['pp']}")
+                        if _sv["accuracy"] is not None:
+                            _h.append(f"命中{_sv['accuracy']}")
+                        if _sv["priority"]:
+                            _h.append(f"先制+{_sv['priority']}")
+                        if _sv["must_hit"]:
+                            _h.append("必中")
+                        if _sv["category"] and _sv["category"] != "?":
+                            _h.append(_sv["category"])
+                        lines.append("- " + "｜".join(_h))
+                        _eff = _sv.get("effects") or []
+                        for _e in _eff[:3]:
+                            lines.append("    " + str(_e)[:110])
+                        if len(_eff) > 3:
+                            lines.append(f"    （还有 {len(_eff) - 3} 条效果）")
             intro = self.kb.pet_intro(fpid)
             if intro:
                 lines.append("简介：" + intro[:80])
@@ -1485,11 +1527,16 @@ class SeerExpertPlugin(Star):
 
 
     @llm_tool(name="seer_skill")
-    async def seer_skill(self, event: AstrMessageEvent, name: str) -> str:
+    async def seer_skill(self, event: AstrMessageEvent, name: str,
+                         brief: bool = False) -> str:
         """查询技能详情：威力、命中、PP、先制、效果文本（含〔固有〕〔命中〕标记）。
+
+        默认会附上「玩家已确认的规则 / 赛尔专门词 / 官方词条定义」，那部分常有 1500+ 字。
+        只是想知道这个技能干什么用，传 brief=True 只回技能本体（几十字）。
 
         Args:
             name(string): 技能名，支持模糊匹配
+            brief(boolean): 只要技能本体，不附规则和术语解释。批量看技能时用这个
         """
         _miss = self._db_missing()
         if _miss:
@@ -1550,6 +1597,10 @@ class SeerExpertPlugin(Star):
 
         raw = ("【数据源】SeerAPI 本地库 " + str(v["name"]) + chr(10) + head + body)
         result = await self._learn_and_render(f"skill:{v['name']}", "skill", raw, event)
+        # ★ 2026-11-18：brief 就停在这 —— 下面三段（规则/术语/词条）常有 1500+ 字，
+        #   批量看技能时纯属噪音（实测 5 个技能 7500 字，本体只占 400）。
+        if brief:
+            return result
         words = [v["name"]] + [w for w in ("魇昧", "异常", "镜", "衍化", "先制") if w in (raw or "")]
         rules = self.kb.facts_search(" ".join(words), 5)
         if rules:
