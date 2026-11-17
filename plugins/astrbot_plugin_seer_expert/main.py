@@ -3007,29 +3007,36 @@ class SeerExpertPlugin(Star):
                 "_dev_note.md` 里写东西。")
 
     @llm_tool(name="seer_read_code")
-    async def seer_read_code(self, event: AstrMessageEvent, path: str,
+    async def seer_read_code(self, event: AstrMessageEvent, path: str = "",
                              pattern: str = "", start: int = 0,
-                             limit: int = 200) -> str:
+                             limit: int = 200, callers: str = "") -> str:
         """只读地看赛尔插件的源码 —— 想知道某个数字/规则是从哪来的就用它。
 
         # 什么时候用
         群友问的数值你觉得可疑、或者要给一个**有依据**的回答时，
         与其猜，不如翻源码确认。**只在赛尔插件里找**，别的地方读不到。
 
-        # 注意
-        · 只读，没有任何写操作
-        · 默认返回 200 行，上限 400 —— 要看的范围大就分几次，配合 pattern 筛
-        · 路径写相对路径：`db.py` / `main.py`，或跨插件写
-          `astrbot_plugin_seer_info/service.py`
+        # 两种用法
+        ① 读源码：path + pattern/start/limit。pattern 命中 def/class 会回**整个函数**
+        ② 查谁在调它：callers="函数名"。扫三个插件所有 .py，报「哪个文件第几行、
+           在哪个函数里调的」。改函数前先查这个，此时 path 不用填
+
+        只读，无写操作。默认 200 行，上限 400。路径写相对路径（`db.py` /
+        `astrbot_plugin_seer_info/service.py`），要看的范围大就分几次。
 
         Args:
             path(string): 相对路径，如 `db.py`、`service.py`、
-                `templates/config_card/template.html.j2`
+                `templates/config_card/template.html.j2`。用 callers 时不用填
             pattern(string): 只返回**含这个词**的行（带行号）。留空返回整段
             start(number): 从第几行开始（0 表示开头），配合 limit 翻页
             limit(number): 最多返回多少行，默认 200，上限 400
+            callers(string): 函数名。填了就查「谁在调这个函数」，忽略 path
         """
         import os as _os
+
+        # ★ 2026-11-18：callers 模式 —— 谁在调这个函数
+        if str(callers or "").strip():
+            return self._find_callers(str(callers).strip())
 
         real, err = self._resolve_code_path(path)
         if not real:
@@ -3128,6 +3135,112 @@ class SeerExpertPlugin(Star):
                 if total > off + len(seg) else "")
         return (f"{rel_show}　第 {off + 1}~{off + len(seg)} 行 / 共 {total} 行：\n"
                 f"{body}{tail}")
+
+    def _find_callers(self, fname: str) -> str:
+        """扫三个赛尔插件，找谁调用了 fname。"""
+        import os as _os
+        import re as _re
+
+        name = str(fname or "").strip()
+        if not _re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+            return f"「{name}」不像函数名（只能是字母/数字/下划线）"
+
+        base = _os.path.dirname(_os.path.abspath(__file__))
+        plugins_root = _os.path.dirname(base)
+
+        call_re = _re.compile(r"\b" + _re.escape(name) + r"\s*\(")
+        def_re = _re.compile(r"^\s*(?:async\s+)?(?:def|class)\s+" + _re.escape(name) + r"\b")
+        any_def_re = _re.compile(r"^\s*(?:async\s+)?def\s+(\w+)")
+
+        hits: list[tuple[str, int, str, str]] = []   # (文件, 行号, 所在函数, 该行)
+        scan_roots = [r for r in self._CODE_ROOTS
+                      if _os.path.isdir(_os.path.join(plugins_root, r))]
+
+        for root in scan_roots:
+            pdir = _os.path.join(plugins_root, root)
+            for dirpath, _dirnames, filenames in _os.walk(pdir):
+                for fn in filenames:
+                    if not fn.endswith(".py"):
+                        continue
+                    fp = _os.path.join(dirpath, fn)
+                    try:
+                        L = io.open(fp, encoding="utf-8", errors="replace").read().split("\n")
+                    except OSError:
+                        continue
+                    # ★ 先标出哪些行在 docstring 里 —— 三引号计数，奇数为内部。
+                    #   bot 实测会误报：render_card.py 的 docstring 正文里
+                    #   写着一个带括号的函数名，那是说明不是调用。
+                    _in_doc: list[bool] = []
+                    _q = 0
+                    for _ln in L:
+                        _cnt = _ln.count('"""')
+                        if _cnt:
+                            _in_doc.append(True)              # 三引号所在行本身也算
+                            _q += _cnt
+                        else:
+                            _in_doc.append(_q % 2 == 1)
+
+                    for i, ln in enumerate(L):
+                        if not call_re.search(ln):
+                            continue
+                        st = ln.strip()
+                        if st.startswith("#"):
+                            continue
+                        if _in_doc[i]:                # docstring 正文里提到不算调用
+                            continue
+                        if def_re.match(ln):          # 定义行不算调用
+                            continue
+                        # 往上找最近的 def
+                        owner = "<模块顶层>"
+                        ind0 = len(ln) - len(ln.lstrip())
+                        for k in range(i - 1, -1, -1):
+                            prev = L[k]
+                            if not prev.strip():
+                                continue
+                            m2 = any_def_re.match(prev)
+                            if m2:
+                                ind2 = len(prev) - len(prev.lstrip())
+                                if ind2 < ind0:
+                                    owner = m2.group(1)
+                                    break
+                        rel = _os.path.relpath(fp, plugins_root).replace("\\", "/")
+                        hits.append((rel, i + 1, owner, st))
+
+        if not hits:
+            return (f"「{name}」在三个赛尔插件里没有被调用（可能是死代码，"
+                    f"或者名字拼错了）。\n  想确认它存不存在，用 pattern={name} 查定义。")
+
+        # 汇总：按文件分组
+        by_file: dict[str, list[tuple[int, str, str]]] = {}
+        for rel, ln_no, owner, code in hits:
+            by_file.setdefault(rel, []).append((ln_no, owner, code))
+
+        show = 40
+        out = [f"「{name}」被调用 {len(hits)} 处，分布在 {len(by_file)} 个文件："]
+        printed = 0
+        for rel in sorted(by_file):
+            out.append("")
+            out.append(f"  {rel}")
+            for ln_no, owner, code in by_file[rel]:
+                if printed >= show:
+                    break
+                out.append(f"    L{ln_no:<6} 在 {owner} 里 → {code[:96]}")
+                printed += 1
+        if len(hits) > printed:
+            out.append("")
+            out.append(f"  …… 还有 {len(hits) - printed} 处没显示")
+
+        # 改动影响面提示
+        if len(hits) == 1:
+            out.append("")
+            out.append("  → 只有一处调用，改动影响面小。")
+        elif len(by_file) == 1:
+            out.append("")
+            out.append(f"  → 集中在同一个文件里（{len(hits)} 处），改这个文件时一起看。")
+        else:
+            out.append("")
+            out.append(f"  → 跨 {len(by_file)} 个文件，改它之前这些地方都要过一遍。")
+        return "\n".join(out)
 
     @llm_tool(name="seer_gem")
     async def seer_gem(self, event: AstrMessageEvent, keyword: str = "") -> str:
@@ -3737,26 +3850,20 @@ class SeerExpertPlugin(Star):
     ) -> str:
         """给精灵生成一张**数据配置图**（面板数值表），不是绘画、不是取群友上传的截图。
 
-产出：1040×760 的信息图 —— 立绘 + 六项面板 + 三个刻印 + 绑定宝石 + 套装/称号/目镜加成。
+产出：1040×760 信息图 —— 立绘 + 六项面板 + 三刻印 + 绑定宝石 + 套装/称号/目镜加成。
 群友要「配置图」「面板图」「配装图」用这个；要看群友**投稿的截图**用 seer_player_config；
 只看六项数值用 seer_stat（快得多）；**不要用 gemini 那类图像生成工具**（会画出立绘）。
 
-**只有 name 是必填**，其余留空都会自动推：preset→爆体 / nature→按流派 / ev→按预设 /
-mints→推荐三件 / team_skip→按种族判 / soulmod→从魂印原文识别。
-群友明确说了某项（「开朗性格」「刻印用九天攻」「体力刷到1100」）才传对应参数。
+**只有 name 是必填**，其余留空都会自动推（preset→爆体 / nature→按流派 / ev→按预设 /
+mints→推荐三件 / team_skip→按种族判 / soulmod→从魂印原文识别）。
+群友明确说了某项（「开朗性格」「刻印用九天攻」「体力刷到 1100」）才传对应参数。
 
-刻印名写错会**直接返回错误 + 相近候选、不出图**，不会出现「少装两个刻印但图照出」。
-群友只给系列名（「一龙子」「双黄金」）时直接传系列名，系统按方向自动补全并标注「※ 推理补全」；
-**不确定方向就先用 seer_mintmark 查具体数值**，别凭名字眼熟挑。
+刻印名写错会**直接返回错误 + 相近候选、不出图**，不会「少装两个但图照出」。
+群友只给系列名（「一龙子」「双黄金」）就直接传系列名，系统按方向补全并标「※ 推理补全」；
+**不确定方向先用 seer_mintmark 查数值**，别凭名字眼熟挑。
 
-什么时候用：
-· 「看看顶配XX的配置图」「生成一下XX的配置图」「XX这配置长什么样」
-· 群友给了一整套配置，想确认最终面板
-· 讨论配装时想把结果画出来给人看
-
-什么时候不用：
-· 群友问「XX的配置图」而他之前**上传过**截图 → 那是「配置图 XX」命令的事
-· 只想看六项数值 → seer_stat
+什么时候用：「看看顶配XX的配置图」「生成一下XX的配置图」，或者群友给了一整套配置想确认面板。
+什么时候不用：他之前**上传过**截图（那是「配置图 XX」命令的事）；只想看六项数值（用 seer_stat）。
 
 Args:
         name(string): 精灵名
@@ -3768,7 +3875,7 @@ Args:
             （max=刷满252；数值是**最终面板**；rest=剩下的全给谁）
         mints(string): 刻印，逗号分隔最多 3 个，支持简称（九天攻/圣战体/v8）
         gems(string): 宝石，与 mints 一一对应（位置决定绑哪个刻印）。
-            写法 "威力宝石Lv7@辟邪斩"，@ 后面是**技能名**不是刻印名，不需要就给空位
+            写法 "威力宝石Lv7@技能名"，@ 后面是**技能名**不是刻印名，不需要就给空位
         suit(string): 套装名，简称即可（晨曦/圣芒/裁决，模糊匹配）
         title(string): 称号名，如「神话」「星光之旅」
         eye(string): 目镜名，如「漫游者-AH」
@@ -5870,32 +5977,30 @@ Args:
         """画一张「从夯到拉」的精灵分级榜（梗图），把精灵按强度/风评排进五档。
 
 # 什么时候用
-群友说「排个榜」「做个梯度图」「盘点谁强谁弱」「从夯到拉」
-「谁是版本答案」「哪些已经废了」时用。**不用等指令**，你判断该排就排。
+群友说「排个榜」「做个梯度图」「盘点谁强谁弱」「从夯到拉」「谁是版本答案」时用。
+**不用等指令**，你判断该排就排。
 
 # 标题按群友的话起（重要）
 title 别固定写「从夯到拉」，照着群友的意思起：
 群友「盘点跌落神坛的」→ title「盘点赛尔号那些跌落神坛的精灵」
-群友「现在版本谁最强」→ title「当前版本梯度榜」
 subtitle 补一句限定：「（限 PVP）」「（按 11 月版本）」。没给语气就留空用默认。
 
 # 选谁进榜也按群友说的来
-群友点名了就排他们点的；说「随便排几个」才自己挑典型精灵。
-**别自作主张塞进一堆没人提的精灵** —— 榜是给群友看的。
+群友点名了就排他们点的；说「随便排几个」才自己挑。**别自作主张塞人**。
 
-# 你的职责：把任意说法转成标准格式
-群友可能说「1.无极圣武 2.谱尼 3.环源」，也可能说「无极圣武是神，谱尼还行，皮皮基本废了」，
-还可能带情绪「这版本艾夏拉烂完了」。**先判断每只该进哪档，再转成**
+# 把任意说法转成标准格式
+群友可能说「1.无极圣武 2.谱尼」、也可能说「无极圣武是神，皮皮基本废了」，
+还可能带情绪「这版本艾夏拉烂完了」。**先判断每只进哪档，再转成**
 `夯:无极圣武 顶级:谱尼 拉完了:皮皮`
-拿不准风评的放「NPC」，别硬吹成夯。完全看不出强弱的纯列表，可以问群友
-「按强度排还是按版本风评排」，或者用 kb 的种族值/技能先给个大致梯度。
+拿不准风评的放「NPC」，别硬吹成夯。看不出强弱的纯列表，可以问群友
+「按强度排还是按版本风评排」。
 
 # 五档（写错会自动纠正）
 夯 / 顶级 / 人上人 / NPC / 拉完了
 别名：神·幻神·T0·S → 夯；T1·A → 顶级；T2·B → 人上人；普通·T3 → NPC；拉·下水道·T4 → 拉完了
 
 # 精灵名
-支持正式名、简称、俗称（走别名表）、错字。查不到的会画成占位，不会整张失败 ——
+支持正式名、简称、俗称、错字。查不到的会画成占位，不会整张失败 ——
 **排完在文字里说一句「XX 没查到，用了占位」**。
 
 Args:
