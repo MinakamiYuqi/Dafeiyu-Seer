@@ -29,6 +29,14 @@ import zipfile
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN_DIR = os.path.join(REPO_ROOT, "plugins")
+
+# ★ 2026-11-17：知识库随包发布（以前没带，别人装完 facts 全空）。
+#   源文件取自数据目录；zip 里叫 kb_seed.sqlite，插件首次启动复制到 plugin_data。
+SEED_KB = {"astrbot_plugin_seer_expert": "kb_seed.sqlite"}
+DATA_DIR = os.environ.get(
+    "SEER_DATA_DIR",
+    r"G:\temp\instances\eb74352a-db17-4359-aade-ba98505d2e47\core\data\plugin_data",
+)
 DIST_DIR = os.path.join(REPO_ROOT, "dist")
 
 # 不进 zip 的目录 / 后缀
@@ -91,6 +99,19 @@ def build(pname: str) -> tuple[str, int, float]:
                 rel = os.path.relpath(full, src).replace(os.sep, "/")
                 z.write(full, rel)
                 count += 1
+
+        # ★ 知识库作为种子文件一起打进去（zip 根，和 metadata.yaml 同级）
+        seed_name = SEED_KB.get(pname)
+        if seed_name:
+            kb_src = os.path.join(DATA_DIR, pname, "kb.sqlite")
+            if os.path.isfile(kb_src):
+                z.write(kb_src, seed_name)
+                count += 1
+                print(f"    + {seed_name}  {os.path.getsize(kb_src) / 1048576:.2f} MB"
+                      f"（来自 {kb_src}）")
+            else:
+                print(f"    ⚠ 找不到知识库 {kb_src} —— 这个包不带种子库，"
+                      f"别人装完 facts 会是空的")
     return zpath, count, os.path.getsize(zpath) / 1048576
 
 
@@ -102,11 +123,13 @@ def verify(zpath: str, pname: str) -> bool:
     ok_main = "main.py" in names
     ok_slash = all("\\" not in n for n in names)
     ok_flat = not any(n.startswith(f"{pname}/") for n in names)
+    need_seed = pname in SEED_KB
+    ok_seed = (SEED_KB[pname] in names) if need_seed else True
     marks = "".join(
-        "✅" if x else "❌" for x in (ok_meta, ok_main, ok_slash, ok_flat)
+        "✅" if x else "❌" for x in (ok_meta, ok_main, ok_slash, ok_flat, ok_seed)
     )
-    print(f"    结构检查 {marks}  (metadata / main / 正斜杠 / 无顶层目录)")
-    return all((ok_meta, ok_main, ok_slash, ok_flat))
+    print(f"    结构检查 {marks}  (metadata / main / 正斜杠 / 无顶层目录 / 种子知识库)")
+    return all((ok_meta, ok_main, ok_slash, ok_flat, ok_seed))
 
 
 def main(argv: list[str]) -> int:
