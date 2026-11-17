@@ -1356,7 +1356,7 @@ class SeerKnowledge:
     def build_view(
         self,
         name: str,
-        preset: str = "爆体",
+        preset: str = "",
         *,
         vs: str = "",
         talent: int = 31,
@@ -1379,8 +1379,10 @@ class SeerKnowledge:
             "empty_hint": None, "vs": vs,
         }
         # ★ 先过一遍别名（爆速→高速 / 物攻→爆攻 …），空值回落默认爆攻
-        _p = str(preset or "").strip()
-        _p = self.PRESET_ALIAS.get(_p, _p) or "爆体"
+        # ★ 2026-11-17：要记住「调用方到底传没传方向」—— 传了就该按那个方向挑，
+        #   和 mint_view 同一套语义；没传才用 pet_build 的专属配装。
+        _raw_preset = str(preset or "").strip()
+        _p = self.PRESET_ALIAS.get(_raw_preset, _raw_preset) or "爆体"
         if _p not in self.PRESET_MINTS:
             view["empty_hint"] = (
                 f"预设没有「{preset}」。可选：{' / '.join(self.PRESET_MINTS)}"
@@ -1402,7 +1404,18 @@ class SeerKnowledge:
         #   无为（三310）、玄武（双防向）全给错，必须让专属表覆盖。
         _own = self.pet_build(pid) if hasattr(self, "pet_build") else {}
         # ★ 2026-11-16：用户传了 mints 就用用户的；没传才用 pet_build 里的专属配装
-        if _own.get("mints"):
+        # ★ 2026-11-17：显式传了方向（爆攻/爆体…）就不再用专属配装 ——
+        #   mint_view 一直是这个语义，build_view 原来不是，两个入口给不同刻印。
+        if _own.get("mints") and _raw_preset:
+            # ★ 2026-11-17：显式方向压过了专属配装 → 把表里那套记下来，
+            #   回执里要提示一句。否则群友会把「按方向重挑」的结果当成权威配置
+            #   （无极爆攻 4582 vs 专属 4537，bot 就来问过是不是回归）。
+            view["own_override"] = {
+                "mints": list(_own["mints"]),
+                "soulmod": str(_own.get("soulmod") or ""),
+            }
+
+        if _own.get("mints") and not _raw_preset:
             view["found"] = True
             view["pid"] = pid
             view["pet_name"] = petname
@@ -1602,7 +1615,7 @@ class SeerKnowledge:
                     "style": style,
                     "dir_cn": dir_cn,
                     "mints": _own_mints[:limit],
-                    "preset": _own.get("soulmod") and "专属" or "专属",
+                    "preset": "专属",
                     "note": (
                         (f"【专属配装·{_own.get('soulmod') or '手工调过'}】"
                          if _own.get("soulmod")
@@ -1794,6 +1807,218 @@ class SeerKnowledge:
                 "spd": int(r[6] or 0), "hp": int(r[7] or 0)}
         return {"id": r[0], "name": r[1], "vals": vals, "total": sum(vals.values())}
 
+
+    # ── 魂印派生：全库唯一的「算不算、算哪种」决策点 + 应用点（2026-11-17 十号鱼）──
+    # 为什么单独抽出来：
+    #   2026-11-17 八号鱼把四种派生搬进 stat_view，用自己编的配装去验，
+    #   验出来的期望是假的，于是整段回滚。**代码本身没错，错的是验证口径。**
+    #   回滚的后果是 stat_view 不算派生、config_view 算 —— 同一只精灵两个入口
+    #   差到 3868（无为觉者 1934 vs 5802），这就是坑 25 的第 N 次重演。
+    # 现在的分工（谁也别再自己写一遍）：
+    #   ① resolve_soulmod   决定「这只精灵按哪种派生算」：显式 > 字符串 > pet_build > 魂印原文
+    #   ② parse_soulmod_str 把「均分 / 双攻差5 / 体力20 / 双防15」解析成四个数值
+    #   ③ _apply_soulmod    把派生写进 battle（四个分支原样搬自 config_view，那里有实例验证）
+
+    _SOULMOD_OFF = {"", "无", "不算", "关", "关掉", "0", "-", "none", "None", "off"}
+
+    def parse_soulmod_str(self, raw: Any) -> dict:
+        """「均分 / 双攻差5 / 体力20 / 双防15」→ 四个数值参数。
+
+        判断顺序是死的（双防 > 均分 > 双攻差 > 体力）：
+        「双防15」也带数字，落到体力分支会被当成 pct=0.15（这个坑踩过）。
+        空串 / 「无」→ 全部归零。
+        """
+        out = {"soulmod_pct": 0.0, "soulmod_atk_diff": 0,
+               "soulmod_average": False, "soulmod_double_def_pct": 0.0}
+        s = str(raw or "").strip()
+        if not s or s in self._SOULMOD_OFF:
+            return out
+        m = None
+        if "双防" in s or "转化" in s:
+            m = re.search(r"(\d+(?:\.\d+)?)", s)
+            if m:
+                v = float(m.group(1))
+                out["soulmod_double_def_pct"] = v / 100.0 if v > 1 else v
+        elif "均分" in s or "总和" in s:
+            out["soulmod_average"] = True
+        elif "双攻差" in s or "英雄之耀" in s:
+            m = re.search(r"(\d+)", s)
+            out["soulmod_atk_diff"] = int(m.group(1)) if m else 5
+        else:
+            m = re.search(r"(\d+(?:\.\d+)?)", s)
+            if m:
+                v = float(m.group(1))
+                out["soulmod_pct"] = v / 100.0 if v > 1 else v
+        return out
+
+    def resolve_soulmod(self, pet: Any, raw: Any = None, *,
+                        soulmod_pct: float = 0.0,
+                        soulmod_atk_diff: int = 0,
+                        soulmod_average: bool = False,
+                        soulmod_double_def_pct: float = 0.0) -> dict:
+        """决定「这只精灵算哪种魂印派生」。**这是全库唯一的决策点。**
+
+        优先级（坑 25：同一个判断只许写一处）：
+          ① 显式数值参数有任意一个非零 → 就用它们
+          ② raw 字符串：None = 没指定（往下走）；""/"无" = 明确不算派生
+          ③ pet_build.soulmod ── 手工调过的记录，权威
+          ④ detect_soulmod ── 从魂印原文自动认
+          ⑤ 都没有 → 不算
+
+        返回四个数值 + src（说明这条从哪来，回执里要用）。
+        """
+        _exp = {
+            "soulmod_pct": float(soulmod_pct or 0.0),
+            "soulmod_atk_diff": int(soulmod_atk_diff or 0),
+            "soulmod_average": bool(soulmod_average),
+            "soulmod_double_def_pct": float(soulmod_double_def_pct or 0.0),
+        }
+        if any(_exp.values()):
+            _exp["src"] = "参数"
+            return _exp
+
+        s = None if raw is None else str(raw).strip()
+        if s is not None:
+            if s in self._SOULMOD_OFF:
+                _z = self.parse_soulmod_str("")
+                _z["src"] = "关闭"
+                return _z
+            _got = self.parse_soulmod_str(s)
+            _got["src"] = f"参数「{s}」"
+            return _got
+
+        pid = None
+        petname = ""
+        try:
+            if isinstance(pet, int):
+                pid = pet
+            else:
+                petname = str(pet or "")
+                _hits = self.find_pets(petname)
+                pid = _hits[0][0] if _hits else None
+        except Exception:  # noqa: BLE001
+            pid = None
+
+        # ③ pet_build 的权威记录
+        if pid:
+            try:
+                own = self.pet_build(pid) or {}
+                _own_s = str(own.get("soulmod") or "").strip()
+                if _own_s:
+                    _got = self.parse_soulmod_str(_own_s)
+                    _got["src"] = f"pet_build「{_own_s}」"
+                    return _got
+                petname = str(own.get("pet_name") or own.get("name") or petname or "")
+            except Exception:  # noqa: BLE001
+                pass
+        if not petname and pid:
+            try:
+                _r = self._q("select name from pet where id = ?", (pid,))
+                petname = str(_r[0][0] or "") if _r else ""
+            except Exception:  # noqa: BLE001
+                petname = ""
+        # ④ 魂印原文
+        if petname:
+            try:
+                auto = self.detect_soulmod(petname) or {}
+            except Exception:  # noqa: BLE001
+                auto = {}
+            _z = self.parse_soulmod_str("")
+            _z["src"] = ""
+            if auto.get("average"):
+                _z["soulmod_average"] = True
+                _z["src"] = "魂印原文·总和均分"
+            elif auto.get("double_def_pct"):
+                _z["soulmod_double_def_pct"] = float(auto["double_def_pct"])
+                _z["src"] = "魂印原文·双防转化"
+            elif auto.get("pct"):
+                _z["soulmod_pct"] = float(auto["pct"])
+                _z["src"] = "魂印原文·体力换属性"
+            elif auto.get("atk_diff_flag"):
+                _z["soulmod_atk_diff"] = 5
+                _z["src"] = "魂印原文·英雄之耀（按 5 层）"
+            return _z
+        _z = self.parse_soulmod_str("")
+        _z["src"] = ""
+        return _z
+
+    def _apply_soulmod(self, battle: list[dict], sm: dict) -> list[str]:
+        """把魂印派生就地写进 battle（每项用 "key" / "value"），返回说明行。
+
+        四个分支原样搬自 config_view（那里的实例注释都保留着），
+        顺序不能动：体力换属性 → 英雄之耀 → 总和均分 → 双防转化。
+        ★ 总和均分是「每项变 S/2」，双防转化是「双防之和的 X%」加到速度外五项 ——
+          两个都是对**已经算完的面板**动手，所以必须在最后。
+        """
+        notes: list[str] = []
+        if not battle:
+            return notes
+        # ⑧ 体力换属性：消耗体力上限的 N%，其他五项各加等量
+        #    实例·天堂极龙兽「消耗20%的体力上限并提升其他能力值等量数值」
+        #    裸 1249/551/382/285/382/415 → 1249×20%=249 → 战内 1000/800/631/534/631/664
+        _pct = float(sm.get("soulmod_pct") or 0.0)
+        if _pct > 0:
+            _hp_row = next((b for b in battle if b["key"] == "hp"), None)
+            if _hp_row:
+                _cut = int(_hp_row["value"] * _pct + 1e-9)   # 向下取整
+                _old = int(_hp_row["value"])
+                _hp_row["value"] = _old - _cut
+                for b in battle:
+                    if b["key"] != "hp":
+                        b["value"] = b["value"] + _cut
+                notes.append(
+                    f"魂印派生：体力上限 {_old} × {_pct:.0%} = {_cut}"
+                    f"（体力 −{_cut}，其余五项各 +{_cut}）"
+                )
+        # ⑧.5 英雄之耀：双攻差 × 15% × 层数 → 加到体力/防御/特防/速度
+        #    实例·无极圣武「双攻差 724-216=508，508×15%×5层=381」
+        _n = int(sm.get("soulmod_atk_diff") or 0)
+        if _n:
+            _by = {b["key"]: b for b in battle}
+            _d = (int(_by["atk"]["value"]) - int(_by["sp_atk"]["value"])
+                  if ("atk" in _by and "sp_atk" in _by) else 0)
+            _gain = int(abs(_d) * 0.15 * _n + 1e-9)
+            if _gain:
+                for _k in ("hp", "def", "sp_def", "spd"):
+                    if _k in _by:
+                        _by[_k]["value"] += _gain
+                notes.append(
+                    f"英雄之耀 {_n} 层：双攻差 {abs(_d)} × 15% × {_n} = {_gain}"
+                )
+                notes.append("__CONT__加到体力 / 防御 / 特防 / 速度，双攻本身不变")
+        # ⑧.6 总和均分：每项变成「六项之和 / 2」
+        #    实例·无为觉者「战斗开始时，自身所有能力值变为所有能力值之和的一半」
+        #    ★是每项变 S/2（总和 S → 3S），不是「总和变 S/2 再均分」
+        if sm.get("soulmod_average"):
+            _S = sum(b["value"] for b in battle)
+            _half = _S // 2
+            for b in battle:
+                b["value"] = _half
+            notes.append(f"魂印·总和均分：六项之和 S={_S} → 每项 = S/2 = {_half}")
+            # ★ S 为奇数时 floor(S/2) 丢 1 点，六项和 = 6×floor(S/2)，与 3S 可能差 3 点
+            notes.append(
+                "__CONT__六项各变 %d，六项和 = %d（S 为奇数时 floor 会丢位）"
+                % (_half, _half * 6)
+            )
+        # ⑧.7 双防转化：自身双防值的 X% 提升至「速度外」的能力值
+        #    实例·镇世神岳·玄武 #4995「双防值的15%提升至速度外的能力值」
+        #    口径：先用**含刻印装备加成后**的防御+特防，×X% 向下取整，
+        #          然后同量加到 攻/防/特攻/特防/体 五项（速度不加）
+        _ddef = float(sm.get("soulmod_double_def_pct") or 0.0)
+        if _ddef:
+            _d = next((b["value"] for b in battle if b["key"] == "def"), 0)
+            _sd = next((b["value"] for b in battle if b["key"] == "sp_def"), 0)
+            _sf = _d + _sd
+            _gain = int(_sf * _ddef)
+            if _gain > 0:
+                for b in battle:
+                    if b["key"] != "spd":          # 速度外的能力值
+                        b["value"] += _gain
+                notes.append(
+                    f"魂印·双防转化：双防 {_d}+{_sd}={_sf} × {_ddef:.0%} = {_gain}"
+                )
+                notes.append("__CONT__同量加到 攻/防/特攻/特防/体 五项，速度不加")
+        return notes
 
     def detect_soulmod(self, name: str) -> dict:
         """从魂印原文自动识别派生类型，省得每次手填 soulmod 参数。
@@ -2584,6 +2809,9 @@ class SeerKnowledge:
         soulmod_atk_diff: int = 0,
         soulmod_average: bool = False,
         soulmod_double_def_pct: float = 0.0,
+        # 魂印派生：None = 按这只精灵自己的魂印自动判断；
+        # ""/"无" = 明确不算；其它字符串（"均分"/"双攻差5"/"体力20"/"双防15"）照解析。
+        soulmod: str | None = None,
         gems: list[str] | None = None,
     ) -> dict[str, Any]:
         """组装配置图数据（字段对齐手册 app 的配置计算器导出图）。
@@ -2848,6 +3076,9 @@ class SeerKnowledge:
             petname, talent=talent, nature=nature, ev=ev,
             mints=list(mints or []), suit=suit, title=title, eye=eye,
             team=False, year_bonus=False, hpup=0,
+            # ★ 2026-11-17：魂印派生由**本函数**在下面应用，
+            #   这里必须传 "" 关掉，否则 stat_view 算一遍、这里再算一遍。
+            soulmod="",
         )
         battle = []
         _extra_flat = dict(team_vals) if team else {}
@@ -2868,81 +3099,20 @@ class SeerKnowledge:
                 "base": r["base"], "mint": r["mint"],
                 "overlay": r["overlay"], "flat": _flat,
             })
-        # ⑧ 魂印派生：消耗体力上限的 N%，其他五项各加等量
-        #    实例·天堂极龙兽「消耗20%的体力上限并提升其他能力值等量数值」
-        #    裸 1249/551/382/285/382/415 → 1249×20%=249 → 战内 1000/800/631/534/631/664
-        _sm = float(soulmod_pct or 0.0)
-        if _sm > 0 and battle:
-            _hp_row = next((b for b in battle if b["key"] == "hp"), None)
-            if _hp_row:
-                _cut = int(_hp_row["value"] * _sm + 1e-9)   # 向下取整
-                _hp_row["value"] = _hp_row["value"] - _cut
-                for b in battle:
-                    if b["key"] != "hp":
-                        b["value"] = b["value"] + _cut
-                view.setdefault("notes", []).append(
-                    f"魂印派生：体力上限 {_hp_row['value'] + _cut} × {_sm:.0%} = {_cut}"
-                    f"（体力 −{_cut}，其余五项各 +{_cut}）"
-                )
-        # ⑧.5 英雄之耀型：双攻差 × 系数 × 层数 → 加到体力/防御/特防/速度
-        #    实例·无极圣武「双攻差 724-216=508，508×15%×5层=381，
-        #    加到体力/防御/特防/速度，双攻本身不变」
-        if soulmod_atk_diff and battle:
-            _by = {b["key"]: b for b in battle}
-            _d = int(_by["atk"]["value"]) - int(_by["sp_atk"]["value"]) \
-                 if ("atk" in _by and "sp_atk" in _by) else 0
-            _gain = int(abs(_d) * 0.15 * int(soulmod_atk_diff) + 1e-9)
-            if _gain:
-                for _k in ("hp", "def", "sp_def", "spd"):
-                    if _k in _by:
-                        _by[_k]["value"] += _gain
-                view.setdefault("notes", []).append(
-                    f"英雄之耀 {soulmod_atk_diff} 层：双攻差 {abs(_d)} × 15% × "
-                    f"{soulmod_atk_diff} = {_gain}"
-                )
-                view["notes"].append("__CONT__加到体力 / 防御 / 特防 / 速度，双攻本身不变")
-        # ⑧.6 总和均分型：每项变成「六项之和 / 2」
-        #    实例·无为觉者「战斗开始时，自身所有能力值变为所有能力值之和的一半」
-        #    ★是每项变 S/2（总和 S → 3S），不是「总和变 S/2 再均分」
-        if soulmod_average and battle:
-            _S = sum(b["value"] for b in battle)
-            _half = _S // 2
-            for b in battle:
-                b["value"] = _half
-            view.setdefault("notes", []).append(
-                f"魂印·总和均分：六项之和 S={_S} → 每项 = S/2 = {_half}"
-            )
-            # ★ 不是「总和变 3S」：S 为奇数时 floor(S/2) 会丢 1 点，
-            #   真实六项和 = 6 × floor(S/2)，与 3S 可能差 3 点以内。
-            view["notes"].append(
-                "__CONT__六项各变 %d，六项和 = %d（S 为奇数时 floor 会丢位）"
-                % (_half, _half * 6)
-            )
-        # ⑧.7 双防转化型：自身双防值的 X% 提升至「速度外」的能力值
-        #    实例·镇世神岳·玄武 #4995
-        #    「战斗开始时，自身双防值的15%提升至速度外的能力值」
-        #    ★口径：先算出**含刻印装备加成后**的防御+特防，再 ×15% 向下取整，
-        #      然后同量加到 攻/防/特攻/特防/体 五项（速度不加）。
-        #    实测（防253 特252 体5，晨曦神话AH顽皮双威临一信仰）：
-        #      小计 攻381 防613 特攻243 特防579 速361 体958
-        #      双防 613+579=1192 → ×15% = 178.8 → 178
-        #      → 559 / 791 / 421 / 757 / 361 / 1135/1136
-        if soulmod_double_def_pct and battle:
-            _d = next((b["value"] for b in battle if b["key"] == "def"), 0)
-            _sd = next((b["value"] for b in battle if b["key"] == "sp_def"), 0)
-            _sf = _d + _sd
-            _gain = int(_sf * float(soulmod_double_def_pct))
-            if _gain > 0:
-                for b in battle:
-                    if b["key"] != "spd":          # 速度外的能力值
-                        b["value"] += _gain
-                view.setdefault("notes", []).append(
-                    f"魂印·双防转化：双防 {_d}+{_sd}={_sf} × "
-                    f"{float(soulmod_double_def_pct)*100:.0f}% = {_gain}"
-                )
-                view["notes"].append(
-                    f"__CONT__同量加到 攻/防/特攻/特防/体 五项，速度不加"
-                )
+        # ⑧ 魂印派生（体力换属性 / 英雄之耀 / 总和均分 / 双防转化）
+        #    ★ 算法本体在 _apply_soulmod —— 2026-11-17 十号鱼：
+        #      原来这 70 多行写死在 config_view 里，stat_view 没有对应实现，
+        #      同一只精灵两个入口差到 3868。现在两边都只调这一个方法（坑 25）。
+        _sm_res = self.resolve_soulmod(
+            pid, soulmod,
+            soulmod_pct=soulmod_pct, soulmod_atk_diff=soulmod_atk_diff,
+            soulmod_average=soulmod_average,
+            soulmod_double_def_pct=soulmod_double_def_pct,
+        )
+        view["soulmod"] = _sm_res
+        _sm_notes = self._apply_soulmod(battle, _sm_res)
+        if _sm_notes:
+            view.setdefault("notes", []).extend(_sm_notes)
         if _extra_flat:
             view.setdefault("notes", []).insert(0,
                 "已叠加：战队加成" + ("＋年费全属性+10" if year_bonus else "") + ("＋体力上限药剂+%d" % _hpup if _hpup else ""))
@@ -3047,6 +3217,14 @@ class SeerKnowledge:
         #   导致「六项和均分」型精灵（无为觉者）stat 比配置图每项少 10。
         #   统一成 20（满配默认带体力上限药剂）。要裸算传 hpup=0。
         hpup: int = 20,
+        # ★ 2026-11-17：魂印派生。**默认 None = 按这只精灵自己的魂印自动算**，
+        #   和配置图同一个口径（都走 resolve_soulmod）。
+        #   要裸面板传 soulmod="" 或 "无"；要试算别的类型传 "均分" / "双攻差5" / ...
+        soulmod: str | None = None,
+        soulmod_pct: float = 0.0,
+        soulmod_atk_diff: int = 0,
+        soulmod_average: bool = False,
+        soulmod_double_def_pct: float = 0.0,
     ) -> dict[str, Any]:
         """面板计算：种族值 → 满级面板（可叠刻印/套装/称号/目镜）。
 
@@ -3194,6 +3372,22 @@ class SeerKnowledge:
                 "overlay": ov.get(key, 0), "flat": flat.get(key, 0),
                 "final": final,
             })
+        # ④ 魂印派生（和 config_view 同一份实现）
+        _sm_res = self.resolve_soulmod(
+            pid, soulmod,
+            soulmod_pct=soulmod_pct, soulmod_atk_diff=soulmod_atk_diff,
+            soulmod_average=soulmod_average,
+            soulmod_double_def_pct=soulmod_double_def_pct,
+        )
+        view["soulmod"] = _sm_res
+        _bt = [{"key": r["key"], "value": r["final"]} for r in rows]
+        _sm_notes = self._apply_soulmod(_bt, _sm_res)
+        if _sm_notes:
+            for r, b in zip(rows, _bt):
+                if b["value"] != r["final"]:
+                    r["soulmod"] = b["value"] - r["final"]
+                r["final"] = b["value"]
+            view["soulmod_notes"] = _sm_notes
         view["rows"] = rows
         view["total"] = sum(r["final"] for r in rows)
         return view

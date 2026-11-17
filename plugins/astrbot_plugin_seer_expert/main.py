@@ -1165,6 +1165,18 @@ class SeerExpertPlugin(Star):
                 return          # 同一版，已经提示过了
             self._dev_note_mtime = mtime
 
+            # ★ 2026-11-17（鱼片指出）：**空板子不提示**。
+            #   清空留言板同样会改 mtime，原来会让 bot 白读一轮「（空）」。
+            #   判据复用 seer_dev_note 里那个，别在这里再写一份（坑 25）。
+            try:
+                with open(path, "r", encoding="utf-8") as _f:
+                    _txt = _f.read()
+            except Exception:  # noqa: BLE001
+                _txt = ""
+            if not self._dev_note_has_pending_items(_txt):
+                logger.debug("[赛尔] 留言板变了但没有待验项，不提示")
+                return
+
             import time as _t
 
             when = _t.strftime("%m-%d %H:%M", _t.localtime(mtime))
@@ -1445,13 +1457,21 @@ class SeerExpertPlugin(Star):
                     f"羁绊强化「{u['group']}」（需{u['need']}只）："
                     f"原→{u['before'][:70]}｜后→{u['after'][:70]}"
                 )
-            expanded = []
+            # ★ 2026-11-17：这两段以前会整段重复 —— mentioned_effects 基本是
+            #   pet_effects 的子集，两行写一样的内容，白占一倍篇幅（bot 报的 B2 瑕疵）。
+            #   现在：专属效果表里已有的不再重复，多个魂印提到同一效果也只写一次。
+            effects = self.kb.pet_effects(fpid) or []
+            _have = {str(e.get("name") or "") for e in effects}
+            expanded, _seen = [], set(_have)
             for m in (self.kb.pet_soulmarks(fpid) or []):
                 for eff in (self.kb.mentioned_effects(fpid, m) or []):
+                    _nm = str(eff.get("name") or "")
+                    if not _nm or _nm in _seen:
+                        continue
+                    _seen.add(_nm)
                     expanded.append(f"{eff['name']}={eff['desc']}")
             if expanded:
                 lines.append("魂印里提到的专属效果：" + "；".join(expanded))
-            effects = self.kb.pet_effects(fpid)
             if effects:
                 lines.append("专属效果：" + "；".join(f"{e['name']}={e['desc']}" for e in effects))
             if skills:
@@ -2801,7 +2821,10 @@ class SeerExpertPlugin(Star):
             return False
 
         # 取「当前待验项」到下一个 ## 之间的内容
-        m = _re2.search(r"^##\s*当前待验项\s*$(.*?)(?=^##\s|\Z)", txt, _re2.M | _re2.S)
+        # ★ 2026-11-17：标题允许带后缀（「## 当前待验项（1 条）」也算），
+        #   原来要求标题正好是这四个字，带后缀就整节匹配不到 → 有待验项也判空。
+        m = _re2.search(r"^##\s*当前待验项[^\n]*$(.*?)(?=^##\s|\Z)", txt,
+                        _re2.M | _re2.S)
         if not m:
             return False
         body = m.group(1)
@@ -3086,12 +3109,22 @@ class SeerExpertPlugin(Star):
                 #   不拆的后果：留言板清空成「（空）」时，bot 读了也 pending=True，
                 #   但永远不会写回 → pending 挂满 10 分钟 →
                 #   这段窗口里群里任何人要图都会掉到鱼片私聊，群友看不到。
+                _has_work = False
                 try:
                     self._dev_note_pending = True
                     self._dev_note_pending_at = __import__("time").time()
-                    self._dev_note_has_work = self._dev_note_has_pending_items(txt)
+                    _has_work = self._dev_note_has_pending_items(txt)
+                    self._dev_note_has_work = _has_work
                 except Exception:  # noqa: BLE001
                     pass
+
+                # ★ 2026-11-17（鱼片 21:47 指出）：**没有待验项时别回全文**。
+                #   板子不是空文件（「当前待验项」（空）+「结案留档」都是正文），
+                #   原来会整篇进上下文 —— 结案留档是给人看的，bot 不需要。
+                if not _has_work:
+                    return (f"【开发留言板 · {when}】当前待验项：**（空）** —— "
+                            f"没有需要你验证的东西，不用再读全文"
+                            f"（文件 {len(txt)} 字，其中是给维护方看的结案留档）。")
 
                 return f"【开发留言板 · {when}】\n\n{txt}"
 
@@ -3653,7 +3686,7 @@ class SeerExpertPlugin(Star):
         self,
         event: AstrMessageEvent,
         name: str,
-        preset: str = "爆体",
+        preset: str = "",
         vs: str = "",
         talent: int = 31,
         nature: str = "",
@@ -3662,11 +3695,17 @@ class SeerExpertPlugin(Star):
         eye: str = "",
         team_skip: str = "",
     ) -> str:
-        """一键配装：按预设挑三刻印 + 算最终面板。群友问「给最好的爆攻是什么面板」用这个。
+        """一键配装 + 面板：**一次给全**（种族 / 配装 / 学习力 / 性格 / 套装 / 加成前后 / 六项和 / 魂印派生）。
+
+        ★ 群友问「这只精灵面板多少 / 怎么配 / 强不强」——**先调这一个**，
+          不要再去组合 seer_stat + seer_mint + seer_pet：那是三次往返，内容这里都有。
+          只有算「非标准配置的某一项」时才单独用 seer_stat。
 
         Args:
             name(string): 精灵名
-            preset(string): 预设，可选 爆攻 / 爆体（默认）/ 爆盾 / 高速
+            preset(string): 方向，可选 爆攻 / 爆体 / 爆盾 / 高速 / 双刃。
+                **留空=自动**：有手工调过的专属配装就用它，没有才按流派默认爆体。
+                显式传值 = 强制按该方向重挑刻印（和 seer_mint 同一套语义）。
             vs(string): 对线特化。留空=通用；phys=极限抗物理；spec=极限抗特殊
             talent(int): 天赋，满个体 31
             nature(string): 性格。留空按预设自动选（物攻向爆攻=固执、爆盾=顽皮等）
@@ -3702,30 +3741,71 @@ class SeerExpertPlugin(Star):
 
         sep = chr(10)
         lines = []
-        head = f"【{v['name']}】#{v['pid']}·{preset}预设"
+        head = f"【{v['name']}】#{v['pid']}·{v.get('preset') or '自动'}"
         if vs:
             lines.append(head + f"·对线抗{'物理' if vs == 'phys' else '特殊'}")
         else:
             lines.append(head)
+        _dir = str(v['dir_cn'] or "")
+        if len(_dir) > 40:
+            _dir = _dir[:40] + "…"     # pet_build 的 note 会整段塞进来，太长了
         lines.append(
-            f"种族 攻{v['atk_base']} / 特攻{v['spa_base']} → 自动判为 {v['dir_cn']}"
+            f"种族 攻{v['atk_base']} / 特攻{v['spa_base']} → 自动判为 {_dir}"
         )
-        lines.append("刻印：" + " + ".join(v["mints"]))
-        lines.append(f"性格：{v['nature'] or '—'}" + (f" ｜ 套装：{suit}" if suit else ""))
+        st = v.get("stat") or {}
+        _rows = st.get("rows") or []
+
+        # ★ 2026-11-17：从「只给最终面板」改成「一屏给全」。
+        #   bot 抱怨过一次问答要 stat+build+mint 三次往返，而这三样的数据
+        #   build_view 本来就已经全算出来了（rows 里 value 是加成前、final 是加成后）。
+        if _rows:
+            _base_sum = sum(r["base"] for r in _rows)
+            lines.append("种族　" + "  ".join(f"{r['cn']}{r['base']}" for r in _rows)
+                         + f"（合计 {_base_sum}）")
+        lines.append("刻印　" + " + ".join(v["mints"]))
+        if v.get("suit") or v.get("title") or v.get("eye"):
+            lines.append("装备　" + " ｜ ".join(
+                x for x in (v.get("suit"), v.get("title"), v.get("eye")) if x))
+        elif st.get("overlay_hint"):
+            # 通用分支不填 suit/title/eye，但面板里套了默认三件套 —— 用 stat 的提示兜底
+            lines.append("装备　" + str(st["overlay_hint"]).replace("；", " ｜ "))
+        lines.append(f"性格　{v['nature'] or '—'}")
         if v.get("ev_note"):
             lines.append(v["ev_note"])
+        # ★ 2026-11-17：显式方向覆盖了专属配装时要提示 —— 不然群友会拿错数当权威。
+        _ov = v.get("own_override") or {}
+        if _ov.get("mints"):
+            lines.append(
+                "※ pet_build 里另有手工调过的专属配装："
+                + " + ".join(_ov["mints"])
+                + (f"（玩法 {_ov['soulmod']}）" if _ov.get("soulmod") else "")
+                + "—— 上面是按你要的方向重挑的；要看专属那套就别传 preset"
+            )
+        # 来源：专属配装还是预设表 —— 不写清的话，群友会以为是通用推荐
+        if v.get("style") == "own" or v.get("preset") == "专属":
+            lines.append("来源　pet_build 里手工调过的专属配装")
+        else:
+            lines.append(f"来源　预设表「{v.get('preset') or '爆体'}」＋按流派挑物攻/特攻版")
 
-        st = v.get("stat") or {}
-        if st.get("found"):
+        if _rows:
+            _pre = sum(int(r["value"]) for r in _rows)
             lines.append("")
-            lines.append("最终面板：")
-            lines.append("  " + "  ".join(f"{r['cn']}{r['final']}" for r in st["rows"]))
-            if st.get("total"):
-                lines.append(f"  六项和：{st['total']}")
+            lines.append("加成前　" + "  ".join(f"{r['cn']}{r['value']}" for r in _rows)
+                         + f"　六项和 {_pre}")
+            lines.append("加成后　" + "  ".join(f"{r['cn']}{r['final']}" for r in _rows)
+                         + f"　六项和 {st.get('total') or 0}")
+            _plus = " ＋ 魂印派生" if st.get("soulmod_notes") else ""
+            lines.append("　　　　（加成 ＝ 刻印 ＋ 套装/称号/目镜 ＋ 战队年费"
+                         f" ＋ 体力药剂{_plus}）")
+            # ★ 2026-11-17：面板里已经含魂印派生（和配置图同一套），必须说明，
+            #   否则群友拿这个数和别处对不上，会以为是算错了。
+            if st.get("soulmod_notes"):
+                lines.append("魂印派生　" + "；".join(
+                    x.replace("__CONT__", "") for x in st["soulmod_notes"]))
             if st.get("missing_mints"):
                 lines.append("  ⚠ 未找到的刻印：" + "、".join(st["missing_mints"]))
-            if st.get("overlay_hint"):
-                lines.append("  " + st["overlay_hint"])
+            # ★ 2026-11-17：overlay_hint 别在这里再印一遍 ——
+            #   上面「装备」那行已经读的是同一个字段（bot 报的重复）。
         lines.append("")
         lines.append("（同系列最多装 2 个，所以「该维度最高×2 + 另一系列一个」）")
         return sep.join(lines)
@@ -3735,13 +3815,17 @@ class SeerExpertPlugin(Star):
         self,
         event: AstrMessageEvent,
         name: str,
-        preset: str = "爆体",
+        preset: str = "",
     ) -> str:
         """刻印推荐：按精灵种族自动判流派，给三刻印方案（同系列最多 2 个）。
 
+        ★ 只想要方案本身 → 用这个；**想连算出来的面板一起要 → 用 seer_build**。
+
         Args:
             name(string): 精灵名
-            preset(string): 方向预设，可选 爆攻 / 爆体（默认）/ 爆盾 / 高速
+            preset(string): 方向预设，可选 爆攻 / 爆体 / 爆盾 / 高速。
+                **留空=自动**：这只精灵有手工调过的专属配装就用它（pet_build 表），
+                没有才按流派默认走爆体。显式传值 = 强制按该方向重挑，不覆盖专属配装。
         """
         _miss = self._db_missing()
         if _miss:
@@ -3750,9 +3834,16 @@ class SeerExpertPlugin(Star):
         if not v["found"]:
             return v.get("empty_hint") or f"找不到精灵：{name}"
         sep = chr(10)
+        # ★ 2026-11-17：把「这份推荐从哪来」写出来。
+        #   之前 bot 报「五只都对」，但 note 里一次都没有【专属配装】字样 ——
+        #   两条结论自相矛盾。带上来源就不可能再糊弄：专属配装/预设表一眼可辨。
+        _src = ("来源：pet_build 专属配装（手工调过，优先于预设）"
+                if v.get("from_build")
+                else f"来源：预设表「{v.get('preset') or '爆体'}」")
         lines = [
             f"【{v['name']}】#{v['pid']} 刻印推荐",
             v["note"],
+            _src,
             "",
             "方案：" + " / ".join(v["mints"]),
         ]
@@ -4228,11 +4319,9 @@ Args:
             # 刻印：没给就用预设推荐的三件
             if not mint_list:
                 mint_list = [x for x in (b.get("mints") or []) if x]
-            # ★ 精灵专属配装的魂印/战队也要一起带过来
-            #   （无极要「双攻差5」、无为要「均分」、玄武要「双防15」、
-            #     多数物攻向要「跳特攻」——这些只在 pet_build 里才有）
-            if not str(soulmod or "").strip():
-                soulmod = b.get("soulmod") or ""
+            # ★ 精灵专属配装的战队要一起带过来（跳特攻这类只在 pet_build 里）。
+            #   魂印派生不在这里取 —— 统一交给 kb.resolve_soulmod，
+            #   它自己会先读 pet_build.soulmod、再退回魂印原文（见下面）。
             if not str(team_skip or "").strip():
                 team_skip = b.get("team_skip") or ""
             # 套装/称号/目镜同理
@@ -4246,51 +4335,20 @@ Args:
             # 用户显式给了 preset 但查不到这个精灵 → 报错，别硬算
             return b.get("empty_hint") or f"配装失败：{name}"
 
-        # ★ 魂印派生：字符串来源三选一（没传就用 pet_build 的，再没有就自动识别）
-        #   然后**统一解析** —— 解析必须放在所有赋值之后，
-        #   之前放在前面导致 pet_build 的 soulmod 根本没被解析（玄武没转化就是这原因）。
-        import re as _re2
-        if not str(soulmod or "").strip():
-            _auto = self.kb.detect_soulmod(name)
-            if _auto.get("average"):
-                soulmod = "均分"
-            elif _auto.get("double_def_pct"):
-                soulmod = f"双防{int(round(_auto['double_def_pct'] * 100))}"
-            elif _auto.get("pct"):
-                soulmod = f"体力{int(round(_auto['pct'] * 100))}"
-            elif _auto.get("atk_diff_flag"):
-                soulmod = "双攻差5"
-
-        sm_pct = 0.0        # 消耗体力上限 N% 换其他五项
-        sm_diff = 0         # 英雄之耀层数
-        sm_avg = False      # 总和均分
-        sm_ddef = 0.0       # 双防 X% 转化
-        _sm = str(soulmod or "").strip()
-        if _sm:
-            # ★「双防」必须排在「体力」前面判断：两者都带数字，
-            #   "双防15" 落到 else 会被当成体力换属性 pct=0.15。
-            if "双防" in _sm or "转化" in _sm:
-                _n = _re2.search(r"(\d+(?:\.\d+)?)", _sm)
-                if _n:
-                    _v = float(_n.group(1))
-                    sm_ddef = _v / 100.0 if _v > 1 else _v
-            elif "均分" in _sm or "总和" in _sm:
-                sm_avg = True
-            elif "双攻差" in _sm or "英雄之耀" in _sm:
-                _n = _re2.search(r"(\d+)", _sm)
-                sm_diff = int(_n.group(1)) if _n else 5
-            elif "体力" in _sm:
-                _n = _re2.search(r"(\d+(?:\.\d+)?)", _sm)
-                if _n:
-                    _v = float(_n.group(1))
-                    sm_pct = _v / 100.0 if _v > 1 else _v
-            else:
-                _n = _re2.search(r"(\d+(?:\.\d+)?)", _sm)
-                if _n:
-                    _v = float(_n.group(1))
-                    sm_pct = _v / 100.0 if _v > 1 else _v
-            logger.info("[seer_expert] 魂印派生解析：%s → pct=%.2f diff=%d avg=%s ddef=%.2f",
-                        _sm, sm_pct, sm_diff, sm_avg, sm_ddef)
+        # ★ 魂印派生：来源三选一（显式字符串 > pet_build 记录 > 魂印原文），
+        #   **决策 + 解析统一在 kb.resolve_soulmod**（2026-11-17 十号鱼）。
+        #   原来这段在 main.py 手写一份、db 里又实现一份，两边漂过：
+        #   玄武的双防转化在 tweak 路径上直接丢了，而 stat_view 压根不算派生。
+        #   传 None（而不是 ""）才是「没指定，去自动判」——"" 表示明确不算。
+        _sm_auto = self.kb.resolve_soulmod(
+            name, soulmod if str(soulmod or "").strip() else None
+        )
+        sm_pct = float(_sm_auto.get("soulmod_pct") or 0.0)
+        sm_diff = int(_sm_auto.get("soulmod_atk_diff") or 0)
+        sm_avg = bool(_sm_auto.get("soulmod_average"))
+        sm_ddef = float(_sm_auto.get("soulmod_double_def_pct") or 0.0)
+        if _sm_auto.get("src"):
+            logger.info("[seer_expert] 魂印派生：%s", _sm_auto["src"])
 
         # ★ 2026-11-08：套装/称号/目镜默认给顶配，别留空。
         #   原因（用户报的）：空着的时候右下角的小鱼装饰图会错位 ——
@@ -4314,6 +4372,8 @@ Args:
             team_skip=team_skip, hpup=hpup,
             soulmod_pct=sm_pct, soulmod_atk_diff=sm_diff, soulmod_average=sm_avg,
             soulmod_double_def_pct=sm_ddef,
+            # 空串 = 上面已经解析完，别再自动判一次（否则派生算两遍）
+            soulmod="",
         )
         if not view.get("found"):
             return view.get("empty_hint") or f"找不到精灵：{name}"
@@ -4347,6 +4407,7 @@ Args:
                 "team_skip": team_skip, "hpup": hpup,
                 "soulmod_pct": sm_pct, "soulmod_atk_diff": sm_diff,
                 "soulmod_average": sm_avg,
+                "soulmod_double_def_pct": sm_ddef,
             }
         except Exception:
             pass
@@ -4355,8 +4416,8 @@ Args:
         _auto = []
         if team_skip:
             _auto.append(f"战队跳{team_skip}")
-        if soulmod:
-            _auto.append(f"魂印派生={soulmod}")
+        if _sm_auto.get("src"):
+            _auto.append(f"魂印派生={_sm_auto['src']}")
         _note = ("（自动：" + "、".join(_auto) + "）") if _auto else ""
         # ★ 把实际用上的配置原样回报 —— 之前只说「六项：xxx」，
         #   LLM 选错刻印（比如拿爆攻印顶双防位）外面完全看不出来，
@@ -4381,11 +4442,16 @@ Args:
                 f"{x['series']}→{x['picked']}（{x['reason']}，你没说具体哪条）"
                 for x in _inferred
             )
+        # ★ 2026-11-17：宝石绑定警告也要进回执。
+        #   config_view 早就把警告放进 view["warn"] 了，但**只有 tweak 读了它** ——
+        #   直接出图这条路静默通过，bot 报「错宝石一个字警告都没有」。
+        _gw = [w for w in (view.get("warn") or []) if "宝石" in str(w)]
+        _gw_txt = ("\n⚠ " + "\n⚠ ".join(str(w) for w in _gw)) if _gw else ""
         _head = f"（已生成 {view['pet']['name']} 的配置图" if _sent else "配置图渲染好了但发送失败"
         return (f"{_head}{_note}。{_infer_line}\n"
                 f"刻印：{_mint_line}{_diff}\n"
                 f"性格：{view['base'].get('nature') or '—'} ｜ 学习力：{ev or '0'}\n"
-                f"六项：{_six}）")
+                f"六项：{_six}）{_gw_txt}")
 
     @llm_tool(name="seer_config_tweak")
     async def seer_config_tweak(
@@ -4510,22 +4576,12 @@ Args:
                 applied.append(f"战队跳过 → {val}")
                 continue
             if kl in ("soulmod", "魂印"):
-                cur["soulmod_pct"] = 0.0
-                cur["soulmod_atk_diff"] = 0
-                cur["soulmod_average"] = False
-                if "均分" in val or "总和" in val:
-                    cur["soulmod_average"] = True
-                elif "双攻差" in val:
-                    import re as _re2
-                    _m = _re2.search(r"(\d+)", val)
-                    cur["soulmod_atk_diff"] = int(_m.group(1)) if _m else 5
-                elif val:
-                    import re as _re2
-                    _m = _re2.search(r"(\d+(?:\.\d+)?)", val)
-                    if _m:
-                        _v = float(_m.group(1))
-                        cur["soulmod_pct"] = _v / 100.0 if _v > 1 else _v
-                applied.append(f"魂印派生 → {val}")
+                # ★ 2026-11-17：解析统一走 kb.parse_soulmod_str。
+                #   这里原来手写一份，比 db 里的少一个「双防」分支 ——
+                #   玄武切「双防15」会被当成体力换属性；而且 ddef 从不清零，
+                #   改成「无」也关不掉。
+                cur.update(self.kb.parse_soulmod_str(val))
+                applied.append(f"魂印派生 → {val or '无'}")
                 continue
 
             # 目标面板值（不带前缀）
@@ -4608,6 +4664,9 @@ Args:
                         soulmod_pct=float(cur.get("soulmod_pct") or 0),
                         soulmod_atk_diff=int(cur.get("soulmod_atk_diff") or 0),
                         soulmod_average=bool(cur.get("soulmod_average")),
+                        soulmod_double_def_pct=float(cur.get("soulmod_double_def_pct") or 0),
+                        # 面板口径照 cur 来，不让 config_view 再自己猜派生
+                        soulmod="",
                     )
                     if not tv.get("found"):
                         break
@@ -4643,6 +4702,9 @@ Args:
                                 soulmod_pct=float(cur.get("soulmod_pct") or 0),
                                 soulmod_atk_diff=int(cur.get("soulmod_atk_diff") or 0),
                                 soulmod_average=bool(cur.get("soulmod_average")),
+                                soulmod_double_def_pct=float(cur.get("soulmod_double_def_pct") or 0),
+                                # 面板口径照 cur 来，不让 config_view 再自己猜派生
+                                soulmod="",
                             )
                             _r0 = next((b for b in _v0.get("battle") or []
                                         if b["key"] == kk), None)
@@ -4678,6 +4740,9 @@ Args:
             soulmod_pct=float(cur.get("soulmod_pct") or 0),
             soulmod_atk_diff=int(cur.get("soulmod_atk_diff") or 0),
             soulmod_average=bool(cur.get("soulmod_average")),
+            soulmod_double_def_pct=float(cur.get("soulmod_double_def_pct") or 0),
+            # 面板口径照 cur 来，不让 config_view 再自己猜派生
+            soulmod="",
         )
         if not view.get("found"):
             return view.get("empty_hint") or "改完之后算不出来了"
@@ -4731,8 +4796,14 @@ Args:
         mints: str = "",
         suit: str = "",
         title: str = "",
-        eye: str = "", hpup: int = 20) -> str:
+        eye: str = "", hpup: int = 20, soulmod: str = "") -> str:
         """算精灵的满级面板：种族值 → 六项能力值（可叠刻印/套装/称号/目镜）。
+
+        ★ 只想回答「这精灵面板多少」→ **直接用 seer_build**（一次给种族/配装/加成前后/六项和）。
+          这个工具留着算「非标准配置下的某一项」：指定刻印/学习力/套装做单点核算。
+
+        ★ 魂印派生默认就计入（和配置图同一套口径）：均分型、体力换属性型、
+          英雄之耀、双防转化都会自动按这只精灵的魂印算，并在回执里写明。
 
         Args:
             name(string): 精灵名
@@ -4745,6 +4816,8 @@ Args:
             title(string): 称号名，如「神话」
             eye(string): 目镜名，如「漫游者-AH」
             hpup(number): 体力上限药剂加成（0~20），留空按 20。配置图默认就带 20，不传会少 20 —— 均分型精灵每项会少 10
+            soulmod(string): 魂印派生。**留空=自动按这只精灵的魂印算**（均分/体力20/双攻差5/双防15 都会自动识别）；
+                要裸面板传「无」；想试算别的类型传「均分」「双攻差5」「体力20」「双防15」
         """
         _miss = self._db_missing()
         if _miss:
@@ -4754,6 +4827,8 @@ Args:
             name, talent=talent, nature=nature, ev=ev,
             mints=mint_list, suit=suit, title=title, eye=eye,
             hpup=int(hpup or 0),
+            # 留空 → None = 自动按该精灵魂印判；「无」→ 裸面板
+            soulmod=str(soulmod).strip() if str(soulmod or "").strip() else None,
         )
         if not v["found"]:
             return v.get("empty_hint") or f"找不到精灵：{name}"
@@ -4784,6 +4859,9 @@ Args:
             if r["mint"] or r["overlay"] or r.get("flat"):
                 seg += f" = {r['final']}"
             lines.append(f"- {seg}")
+        if v.get("soulmod_notes"):
+            lines.append("魂印派生：" + "；".join(
+                x.replace("__CONT__", "") for x in v["soulmod_notes"]))
         if v.get("total"):
             lines.append(f"六项和：{v['total']}")
         _flat_note = "已含战队+年费" if v.get("flat_total") else "不含战队/年费"
