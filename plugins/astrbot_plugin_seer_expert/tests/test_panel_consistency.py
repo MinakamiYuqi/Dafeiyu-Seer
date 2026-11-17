@@ -136,13 +136,83 @@ def test_soulmod_applies_when_explicit(k):
 
 
 def test_soulmod_matches_config_view(k):
-    """stat_view 和 config_view 传同样的魂印参数，六项必须一致。"""
-    for pet, kw in (("无为觉者", {"soulmod_average": True}),):
-        a = k.stat_view(pet, **kw)
-        b = k.config_view(pet, **kw)
+    """四种魂印派生：stat_view 和 config_view 传同样参数，六项必须一致。
+
+    ★ 必须显式传 nature —— 否则会被一个**原有的**默认值差异干扰：
+      stat_view(nature="") 选坦率，config_view(nature="") 选固执。
+      那不是魂印派生的问题，是坑 25 的另一个实例（默认值两处不一致）。
+      这里传 nature="固执" 把变量固定住，只验派生。
+    """
+    CASES = [
+        ("无为觉者", {"soulmod_average": True}),        # ⑧.6 总和均分
+        ("天堂极龙兽", {"soulmod_pct": 0.20}),          # ⑧   体力上限 20%
+        ("无极圣武", {"soulmod_atk_diff": 5}),          # ⑧.5 英雄之耀
+        ("镇世神岳·玄武", {"soulmod_double_def_pct": 0.15}),  # ⑧.7 双防转化
+    ]
+    for pet, kw in CASES:
+        a = k.stat_view(pet, nature="固执", **kw)
+        b = k.config_view(pet, nature="固执", **kw)
         ar = {r["key"]: r["final"] for r in a["rows"]}
         br = {r2["key"]: r2["value"] for r2 in b["battle"]}
         for key in ("atk", "def", "sp_atk", "sp_def", "spd", "hp"):
             assert ar.get(key) == br.get(key), (
-                f"{pet} 的 {key}: stat={ar.get(key)} config={br.get(key)}"
+                f"{pet}（{kw}）的 {key}: stat={ar.get(key)} config={br.get(key)}"
+            )
+
+
+def test_soulmod_delta_is_correct(k):
+    """四种派生的**增量**必须符合各自公式（不依赖 nature，更硬的约束）。
+
+      ① 体力20%    体力 −cut，其余五项各 +cut
+      ② 英雄之耀   双攻差 × 15% × 层数 → 加到 体力/防/特防/速（双攻不变）
+      ③ 总和均分   每项变 S/2
+      ④ 双防转化   双防和 × pct → 加到「速度外」五项
+    """
+    KEYS = ("atk", "def", "sp_atk", "sp_def", "spd", "hp")
+
+    def finals(**kw):
+        v = k.stat_view("圣灵谱尼", **kw)      # 用没有特殊魂印的精灵当底
+        return {r["key"]: r["final"] for r in v["rows"]}
+
+    base = finals()
+    S = sum(base.values())
+
+    # ③ 总和均分
+    avg = finals(soulmod_average=True)
+    half = S // 2
+    assert all(avg[k2] == half for k2 in KEYS), f"均分应为每项 {half}，实际 {avg}"
+
+    # ② 英雄之耀：双攻差 × 15% × 5
+    d = abs(base["atk"] - base["sp_atk"])
+    gain = int(d * 0.15 * 5)
+    if gain:
+        atk5 = finals(soulmod_atk_diff=5)
+        assert atk5["atk"] == base["atk"], "英雄之耀不该改攻击"
+        assert atk5["sp_atk"] == base["sp_atk"], "英雄之耀不该改特攻"
+        for k2 in ("hp", "def", "sp_def", "spd"):
+            assert atk5[k2] == base[k2] + gain, (
+                f"英雄之耀：{k2} 应 +{gain}，实际 {atk5[k2] - base[k2]}"
+            )
+
+    # ④ 双防转化：双防和 × 15%，速度不加
+    sf = base["def"] + base["sp_def"]
+    g2 = int(sf * 0.15)
+    if g2:
+        dd = finals(soulmod_double_def_pct=0.15)
+        assert dd["spd"] == base["spd"], "双防转化不该改速度"
+        for k2 in ("atk", "def", "sp_atk", "sp_def", "hp"):
+            assert dd[k2] == base[k2] + g2, (
+                f"双防转化：{k2} 应 +{g2}，实际 {dd[k2] - base[k2]}"
+            )
+
+    # ① 体力20%：体力减 cut，其余五项各加 cut
+    cut = int(base["hp"] * 0.20)
+    if cut:
+        pc = finals(soulmod_pct=0.20)
+        assert pc["hp"] == base["hp"] - cut, (
+            f"体力20%：体力应 −{cut}，实际 {base['hp'] - pc['hp']}"
+        )
+        for k2 in ("atk", "def", "sp_atk", "sp_def", "spd"):
+            assert pc[k2] == base[k2] + cut, (
+                f"体力20%：{k2} 应 +{cut}，实际 {pc[k2] - base[k2]}"
             )
