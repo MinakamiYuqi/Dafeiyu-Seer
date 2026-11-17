@@ -36,6 +36,11 @@ README + 命令行工具」，插件在 `plugins/` 子目录里。它看不到�
 
 （也可以去 [Releases](../../releases) 页看更新说明再下）
 
+> **包内自带知识库**：`astrbot_plugin_seer_expert.zip` 里有一个 `kb_seed.sqlite`
+> （1495 条玩家结论 / 322 条文档规则 / 168 篇专栏 / 367 条俗称 / 必先等级表）。
+> 首次启动时它会自动复制到 `plugin_data/astrbot_plugin_seer_expert/kb.sqlite`；
+> **如果那里已经有 kb.sqlite 就跳过，不会覆盖你自己积累的内容**。
+
 然后二选一：
 
 **A. 网页上传**（最省事）
@@ -705,6 +710,20 @@ https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/astrbot_pl
 ## 更新记录
 
 > 每次改动往这里加一条，**最新的放最上面**。格式随意，写清楚「改了什么 + 为什么」就行。
+
+### 2026-11-17 · v1.1.1
+
+**⚠️ Release 包已重打（含知识库）** —— v1.0.0 / v1.1.0 的包里**没有知识库**，
+装上去之后 `facts`（玩家结论）、`doc_rules`、`articles`、`pet_alias`、`first_move_rank`
+全是空的：问机制查不到、问先手判不出、问俗称认不得。
+
+现在 zip 里带 `kb_seed.sqlite`（9.14 MB，整包 4.48 MB），插件首次启动时：
+`plugin_data` 里没有 `kb.sqlite` → 自动复制一份；**已有就跳过，不覆盖你积累的内容**。
+升级不会丢数据。
+
+实测（模拟干净安装，23 项全过）：种子复制 9.14 MB、逐表条数正确、
+`facts_search` / `glossary_view` / `pet_view` / `stat_view` / `build_view` /
+`first_move_resolve` / 俗称识别全部可用、第二次启动不动已有数据。
 
 ### 2026-11-17 · v1.1.0
 
