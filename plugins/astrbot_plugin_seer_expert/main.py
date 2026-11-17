@@ -4391,10 +4391,41 @@ Args:
                     ev_map[kk] = best_ev
                     if best_gap == 0:
                         applied.append(f"{kk} 目标 {want} → 学习力 {best_ev}（正好 {best_val}）")
+                    elif best_val > want:
+                        # ★ 2026-11-18：目标比现有还低，学习力减到 0 也压不下来。
+                        #   bot 报过：hp=1100 只到 1111，回执说「差 11」，
+                        #   看着像还能再调，实际是加成效力已经把它抬过目标了。
+                        _min_val = None
+                        try:
+                            _v0 = self.kb.config_view(
+                                cur["name"], talent=int(cur.get("talent") or 31),
+                                nature=cur.get("nature") or "",
+                                ev=",".join(f"{a}={b}" for a, b in ev_map.items()
+                                            if a != kk) + (f",{kk}=0" if any(
+                                                a != kk for a in ev_map) else f"{kk}=0"),
+                                mints=list(cur.get("mints") or []),
+                                gems=list(cur.get("gems") or []),
+                                suit=cur.get("suit") or "", title=cur.get("title") or "",
+                                eye=cur.get("eye") or "", team_skip=cur.get("team_skip") or "",
+                                hpup=int(cur.get("hpup") or 20),
+                                soulmod_pct=float(cur.get("soulmod_pct") or 0),
+                                soulmod_atk_diff=int(cur.get("soulmod_atk_diff") or 0),
+                                soulmod_average=bool(cur.get("soulmod_average")),
+                            )
+                            _r0 = next((b for b in _v0.get("battle") or []
+                                        if b["key"] == kk), None)
+                            _min_val = int(_r0["value"]) if _r0 else None
+                        except Exception:  # noqa: BLE001
+                            _min_val = None
+                        _floor = _min_val if _min_val is not None else best_val
+                        applied.append(
+                            f"{kk} 目标 {want} 达不到：学习力降到 0 也还有 {_floor}，"
+                            f"比目标高 {_floor - want}（套装/称号/魂印加成效力把它抬上去了）"
+                        )
                     elif best_ev >= 252:
                         applied.append(
-                            f"{kk} 刷满 252 也只能到 {best_val}（差 {want - best_val}）"
-                            f"——这个配置该项上限就是 {best_val}"
+                            f"{kk} 目标 {want} 达不到：学习力刷满 252 也只能到 {best_val}，"
+                            f"比目标低 {want - best_val}（这个配置该项上限就是 {best_val}）"
                         )
                     else:
                         applied.append(
