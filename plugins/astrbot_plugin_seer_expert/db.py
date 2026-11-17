@@ -1575,6 +1575,44 @@ class SeerKnowledge:
         if not preset and style == "dual":
             want = "双刃"
 
+        # ★ 2026-11-18：**优先用 pet_build 表里手工调过的配装**。
+        #   鱼片指出「这些规则都已经在里面了」—— 确实：
+        #     · 无极圣武：瓏·寅勇×2 + 星辉·相伴（二角攻体，拉大双攻差）
+        #     · 玄武    ：刑天·威临×2 + 黄金残影·信仰（双防 65/65）
+        #     · 无为觉者：螭吻×2 + 帝皇·无极（三件都要总和 310）
+        #     · 天堂极龙兽：创造×2 + 赑屃（体力 135 档）
+        #   这些是手工调过的（连学习力给 254 而不是 252 都写了），
+        #   比 PRESET_MINTS 那套通用表准得多。原来 mint_view 压根不读它。
+        #   只在**没传 preset** 时用（传了就说明调用方明确要那个方向）。
+        if not preset:
+            try:
+                _own = self.pet_build(pid) or {}
+                _m = _own.get("mints")
+                # ★ pet_build() 返回的 mints 已经是 list（不是逗号串），
+                #   这里要判类型，否则会把 list 再 split 一次变成嵌套。
+                if isinstance(_m, (list, tuple)):
+                    _own_mints = [str(x).strip() for x in _m if str(x).strip()]
+                else:
+                    _own_mints = [x.strip() for x in str(_m or "").split(",") if x.strip()]
+            except Exception:  # noqa: BLE001
+                _own_mints = []
+            if _own_mints:
+                view.update({
+                    "found": True, "name": petname, "pid": pid,
+                    "style": style,
+                    "dir_cn": dir_cn,
+                    "mints": _own_mints[:limit],
+                    "preset": _own.get("soulmod") and "专属" or "专属",
+                    "note": (
+                        (f"【专属配装·{_own.get('soulmod') or '手工调过'}】"
+                         if _own.get("soulmod")
+                         else "【专属配装·手工调过】")
+                        + (str(_own.get("note"))[:110] if _own.get("note") else "")
+                    ),
+                    "from_build": True,
+                })
+                return view
+
         # ★ 2026-11-18：吃「六项之和」的魂印精灵，按总和挑刻印。
         #   鱼片指出：无为觉者这类「所有能力值变为总和的一半」的精灵，
         #   310 的双攻刻印（螭吻 / 帝皇·无极）才是最优，按单维度挑就挑不到。
