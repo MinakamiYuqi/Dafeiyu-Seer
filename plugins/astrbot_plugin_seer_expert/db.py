@@ -3007,13 +3007,6 @@ class SeerKnowledge:
         #   导致「六项和均分」型精灵（无为觉者）stat 比配置图每项少 10。
         #   统一成 20（满配默认带体力上限药剂）。要裸算传 hpup=0。
         hpup: int = 20,
-        # ★ 2026-11-18：魂印派生（另设窗口）。
-        #   四个参数默认全 0/False → 整段跳过，行为和加之前**完全一致**。
-        #   鱼片的要求：「如果因为这几个特例影响泛用性，不如另设窗口」。
-        soulmod_pct: float = 0.0,
-        soulmod_atk_diff: int = 0,
-        soulmod_average: bool = False,
-        soulmod_double_def_pct: float = 0.0,
     ) -> dict[str, Any]:
         """面板计算：种族值 → 满级面板（可叠刻印/套装/称号/目镜）。
 
@@ -3161,27 +3154,6 @@ class SeerKnowledge:
                 "overlay": ov.get(key, 0), "flat": flat.get(key, 0),
                 "final": final,
             })
-        # ★ 2026-11-18：魂印派生应用（另设窗口，默认不启用）。
-        #   第 ① 步只加了参数，这里才真正算 —— 四个参数全默认时整段跳过。
-        #   为什么放在这里：魂印派生吃的是**含刻印/套装/战队/年费之后**的最终值，
-        #   必须等 rows 全部算完才能应用（和 config_view 里的顺序一致）。
-        if (soulmod_pct or soulmod_atk_diff or soulmod_average
-                or soulmod_double_def_pct):
-            _vmap = {r["key"]: int(r["final"]) for r in rows}
-            _sm_notes = self._apply_soulmod(
-                _vmap,
-                pct=float(soulmod_pct or 0.0),
-                atk_diff=int(soulmod_atk_diff or 0),
-                average=bool(soulmod_average),
-                double_def_pct=float(soulmod_double_def_pct or 0.0),
-            )
-            if _sm_notes:
-                for r in rows:
-                    if r["key"] in _vmap:
-                        r["final"] = _vmap[r["key"]]
-                view.setdefault("notes", []).extend(_sm_notes)
-                view["soulmod_applied"] = True
-
         view["rows"] = rows
         view["total"] = sum(r["final"] for r in rows)
         return view
@@ -3619,117 +3591,6 @@ class SeerKnowledge:
             })
             if len(out) >= int(limit):
                 break
-        return out
-
-    @staticmethod
-    def parse_soulmod_str(sm: str) -> dict:
-        """把「均分 / 体力20 / 双攻差5 / 双防15」解析成四个参数。
-
-        返回 dict（pct / atk_diff / average / double_def_pct），解析不出来就全 0/False。
-        抽自 seer_config_card 那段（2026-11-18），让 seer_stat / seer_build 能复用。
-        """
-        import re as _re
-
-        out = {"pct": 0.0, "atk_diff": 0, "average": False, "double_def_pct": 0.0}
-        t = str(sm or "").strip()
-        if not t:
-            return out
-        # 「双防」必须排在「体力」前面：两者都带数字，
-        # "双防15" 落到 else 会被当成体力换属性 pct=0.15
-        if "双防" in t or "转化" in t:
-            n = _re.search(r"(\d+(?:\.\d+)?)", t)
-            if n:
-                v = float(n.group(1))
-                out["double_def_pct"] = v / 100.0 if v > 1 else v
-        elif "均分" in t or "总和" in t:
-            out["average"] = True
-        elif "双攻差" in t or "英雄之耀" in t:
-            n = _re.search(r"(\d+)", t)
-            out["atk_diff"] = int(n.group(1)) if n else 5
-        elif "体力" in t:
-            n = _re.search(r"(\d+(?:\.\d+)?)", t)
-            if n:
-                v = float(n.group(1))
-                out["pct"] = v / 100.0 if v > 1 else v
-        else:
-            n = _re.search(r"(\d+(?:\.\d+)?)", t)
-            if n:
-                v = float(n.group(1))
-                out["pct"] = v / 100.0 if v > 1 else v
-        return out
-
-    @staticmethod
-    def _apply_soulmod(vals: dict, *, pct: float = 0.0, atk_diff: int = 0,
-                       average: bool = False, double_def_pct: float = 0.0) -> list:
-        """按魂印派生改 vals（key→数值），返回说明文案列表。
-
-        ★ 2026-11-18：从 config_view 里抽出来的，让 stat_view 也能用。
-        鱼片的要求是「另设窗口」—— **参数全 0/False 时直接返回空，不动 vals**，
-        所以默认路径的行为和抽取前完全一致。
-
-        四种类型按顺序应用（后者依赖前者结果，顺序不能调）：
-          ① 体力20%    实例·天堂极龙兽「消耗20%的体力上限并提升其他能力值等量数值」
-          ② 英雄之耀   实例·无极圣武「双攻差×15%×5层 → 加到体力/防/特防/速」
-          ③ 总和均分   实例·无为觉者「所有能力值变为总和的一半」
-          ④ 双防转化   实例·镇世神岳·玄武「双防的15%提升至速度外的能力值」
-        """
-        out: list[str] = []
-        KEYS = ("atk", "def", "sp_atk", "sp_def", "spd", "hp")
-
-        # ① 体力上限的 N% → 体力扣掉，其余五项各加等量
-        _p = float(pct or 0.0)
-        if _p > 0 and "hp" in vals:
-            _cut = int(int(vals["hp"]) * _p + 1e-9)      # 向下取整
-            if _cut:
-                vals["hp"] = int(vals["hp"]) - _cut
-                for k in KEYS:
-                    if k != "hp" and k in vals:
-                        vals[k] = int(vals[k]) + _cut
-                out.append(
-                    f"魂印派生：体力上限 {int(vals['hp']) + _cut} × {_p:.0%} = {_cut}"
-                    f"（体力 −{_cut}，其余五项各 +{_cut}）"
-                )
-
-        # ② 双攻差 × 15% × 层数 → 加到 体力/防御/特防/速度
-        if atk_diff and "atk" in vals and "sp_atk" in vals:
-            _d = int(vals["atk"]) - int(vals["sp_atk"])
-            _gain = int(abs(_d) * 0.15 * int(atk_diff) + 1e-9)
-            if _gain:
-                for k in ("hp", "def", "sp_def", "spd"):
-                    if k in vals:
-                        vals[k] = int(vals[k]) + _gain
-                out.append(
-                    f"英雄之耀 {atk_diff} 层：双攻差 {abs(_d)} × 15% × "
-                    f"{atk_diff} = {_gain}（加到体力/防御/特防/速度，双攻本身不变）"
-                )
-
-        # ③ 每项 = 六项之和 / 2
-        #   ★是每项变 S/2（总和 S → 3S），不是「总和变 S/2 再均分」
-        if average:
-            _S = sum(int(vals.get(k) or 0) for k in KEYS if k in vals)
-            _half = _S // 2
-            for k in KEYS:
-                if k in vals:
-                    vals[k] = _half
-            out.append(
-                f"魂印·总和均分：六项之和 S={_S} → 每项 = S/2 = {_half}"
-                f"（六项和 = {_half * 6}，S 为奇数时 floor 会丢位）"
-            )
-
-        # ④ 双防和 × pct → 加到「速度外」五项
-        if double_def_pct and "def" in vals and "sp_def" in vals:
-            _sf = int(vals["def"]) + int(vals["sp_def"])
-            _gain = int(_sf * float(double_def_pct))
-            if _gain > 0:
-                for k in KEYS:
-                    if k != "spd" and k in vals:
-                        vals[k] = int(vals[k]) + _gain
-                out.append(
-                    f"魂印·双防转化：双防 {int(vals['def'])}+{int(vals['sp_def'])}={_sf} × "
-                    f"{float(double_def_pct) * 100:.0f}% = {_gain}"
-                    f"（加到攻/防/特攻/特防/体，速度不加）"
-                )
-
         return out
 
     @staticmethod
