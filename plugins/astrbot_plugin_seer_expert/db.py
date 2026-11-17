@@ -2887,9 +2887,27 @@ class SeerKnowledge:
         mx = list(r.get("max") or [])
         ex = list(r.get("extra") or [])
         keys = ("atk", "def", "sp_atk", "sp_def", "spd", "hp")
+
+        # ★ 2026-11-18：补 ID。
+        #   原来这里写死 "id": None，因为 _mint_query_chain 的 SQL 没 SELECT ID。
+        #   后果：配置图靠 mm["id"] 找图标 → 变成 None.png → 图标永远不显示
+        #   （鱼片实测「九天刻印图标没有」就是这个）。
+        #   这里用名字反查一次，不动那 293 行查询链。
+        _mid = None
+        try:
+            _nm = str(r.get("name") or "").strip()
+            if _nm:
+                _hit = self._manual_q(
+                    "mintmark",
+                    "select ID from MintMark where Des=? limit 1", (_nm,))
+                if _hit:
+                    _mid = int(_hit[0][0])
+        except Exception:  # noqa: BLE001
+            _mid = None
+
         return {
             "name": r.get("name"),
-            "id": None,
+            "id": _mid,
             "source": "manual_search",
             "vals": {k: (int(mx[i]) if i < len(mx) else 0) for i, k in enumerate(keys)},
             "extra": {k: (int(ex[i]) if i < len(ex) else 0) for i, k in enumerate(keys)},
