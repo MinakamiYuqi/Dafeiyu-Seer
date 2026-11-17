@@ -4731,7 +4731,7 @@ Args:
         mints: str = "",
         suit: str = "",
         title: str = "",
-        eye: str = "", hpup: int = 20, soulmod: str = "") -> str:
+        eye: str = "", hpup: int = 20) -> str:
         """算精灵的满级面板：种族值 → 六项能力值（可叠刻印/套装/称号/目镜）。
 
         Args:
@@ -4745,42 +4745,15 @@ Args:
             title(string): 称号名，如「神话」
             eye(string): 目镜名，如「漫游者-AH」
             hpup(number): 体力上限药剂加成（0~20），留空按 20。配置图默认就带 20，不传会少 20 —— 均分型精灵每项会少 10
-            soulmod(string): 魂印派生。**留空=不算**（默认，数字和以前完全一样）。
-                写 "auto" 按魂印原文自动识别；也可显式写「均分」「体力20」
-                「双攻差5」「双防15」。只有带这类特殊魂印的精灵才会变
         """
         _miss = self._db_missing()
         if _miss:
             return _miss
         mint_list = [x.strip() for x in str(mints or "").replace("，", ",").split(",") if x.strip()]
-        # ★ 2026-11-18：魂印派生（另设窗口）。
-        #   留空 → 四个参数全 0/False → stat_view 里那段整段跳过，
-        #   输出和加这个参数之前**完全一致**。
-        #   只有显式传了 soulmod 才会算。
-        _sm_kw = {"pct": 0.0, "atk_diff": 0, "average": False, "double_def_pct": 0.0}
-        _sm_str = str(soulmod or "").strip()
-        if _sm_str:
-            if _sm_str.lower() in ("auto", "自动"):
-                _auto = self.kb.detect_soulmod(name) or {}
-                if _auto.get("average"):
-                    _sm_kw["average"] = True
-                elif _auto.get("double_def_pct"):
-                    _sm_kw["double_def_pct"] = float(_auto["double_def_pct"])
-                elif _auto.get("pct"):
-                    _sm_kw["pct"] = float(_auto["pct"])
-                elif _auto.get("atk_diff_flag"):
-                    _sm_kw["atk_diff"] = 5
-            else:
-                _sm_kw = self.kb.parse_soulmod_str(_sm_str)
-
         v = self.kb.stat_view(
             name, talent=talent, nature=nature, ev=ev,
             mints=mint_list, suit=suit, title=title, eye=eye,
             hpup=int(hpup or 0),
-            soulmod_pct=_sm_kw["pct"],
-            soulmod_atk_diff=_sm_kw["atk_diff"],
-            soulmod_average=_sm_kw["average"],
-            soulmod_double_def_pct=_sm_kw["double_def_pct"],
         )
         if not v["found"]:
             return v.get("empty_hint") or f"找不到精灵：{name}"
