@@ -35,6 +35,35 @@ PLUGIN_NAME = "astrbot_plugin_seer_expert"
 )
 
 
+def _parse_span_spec(spec: str, *, lo: int = 1, hi: int = 400,
+                      cap: int = 120) -> list[int] | None:
+    """把 "20~60" 解析成 [20..60]；单值/空/超限返回 None（表示不枚举）。
+
+    ★ 2026-11-20 加。全库盘点：effect 31「1回合做{0}次攻击」有 303 处实例，
+      其中 300 处是区间型、52 种区间（最常见 2~3 共 65 处；大区间如 20~60、
+      100~140、1~150 各 1 处）。effect 604「威力随机+连续使用提升」39 处。
+      所以连击次数和威力都得能按区间算期望。
+    """
+    import re as _re2
+
+    t = str(spec or "").strip()
+    if not t:
+        return None
+    m = _re2.fullmatch(r"(\d+)\s*[~\-－—]\s*(\d+)", t)
+    if not m:
+        return None
+    a, b = int(m.group(1)), int(m.group(2))
+    if a > b:
+        a, b = b, a
+    a, b = max(lo, a), min(hi, b)
+    n = b - a + 1
+    if n <= 1 or n > cap:
+        return None
+    return list(range(a, b + 1))
+
+
+
+
 class SeerExpertPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | dict | None = None):
         super().__init__(context)
@@ -5227,9 +5256,9 @@ Args:
     async def seer_damage(
         self,
         event: AstrMessageEvent,
-        power: int,
-        atk: int,
-        defense: int,
+        power: int = 0,
+        atk: int = 0,
+        defense: int = 0,
         level: int = 100,
         attack_type: str = "",
         defend_type: str = "",
@@ -5256,7 +5285,8 @@ Args:
         attr_type: str = "",
         atk_stage: int = 0,
         defense_stage: int = 0,
-        hits: int = 1,
+        power_span: str = "",
+        hits: str = "1",
         target_hp: float = 0.0,
     ) -> str:
         """估算一次攻击的伤害并给出乘区拆解。魂印/特性请折算成具体参数。
@@ -5296,12 +5326,72 @@ Args:
         attr_type(string): 属性伤害系别，空则用 attack_type
         atk_stage(int): 攻击等级 -6~+6（先换算面板再进公式）
         defense_stage(int): 防御等级 -6~+6
-        hits(int): 连击次数（>1 走「单段取整、浮动只掷一次」口径）
+        hits(string): 连击次数。整数 "1"；**随机段数写区间** "20~60"，会出期望和分位
+        power_span(string): 威力区间，如 "150~300"（和 power 二选一）。给了就枚举算期望
         target_hp(float): 防守方最大体力，用于百分比伤害
         """
         _miss = self._db_missing()
         if _miss:
             return _miss
+
+        # ══ 区间模式（hits="20~60" / power_span="150~300"）══════════════
+        # ★ 2026-11-20 加。依据全库盘点：
+        #   effect 31「1回合做{0}次攻击」303 处实例，其中 300 处是区间型、52 种区间
+        #   （冥之狂电 args=[20,60] 就是其中之一）；effect 604「威力随机+连续使用提升」
+        #   39 处。段数/威力都是随机的话，报单一数字没意义，得给期望和分位。
+        _h_list = _parse_span_spec(hits, lo=1, hi=300, cap=120)
+        _p_list = _parse_span_spec(power_span, lo=1, hi=2000, cap=400)
+        if _h_list or _p_list:
+            _P = _p_list or [int(power or 0)]
+            _H = _h_list or [max(1, int(str(hits).strip() or 1))]
+            if not any(_P):
+                return "区间模式要给 power（单值）或 power_span（区间），现在两个都空。"
+            _vals = []
+            _first = None
+            for _p in _P:
+                for _h in _H:
+                    for _fl in range(217, 256):
+                        _v2 = self.kb.dmg_view(
+                            power=_p, atk=atk, defense=defense, level=level,
+                            attack_type=attack_type, defend_type=defend_type,
+                            type_mult=type_mult, type_mult_cap=type_mult_cap,
+                            stab=stab, crit=crit, other=other, random=_fl,
+                            power_boost=power_boost, power_flat=power_flat,
+                            variable_power=variable_power,
+                            general_add=general_add, extra_add=extra_add,
+                            general_reduce=general_reduce, extra_reduce=extra_reduce,
+                            resist=resist, flat=flat, percent=percent,
+                            true_damage=true_damage, attr_damage=attr_damage,
+                            attr_type=attr_type, atk_stage=atk_stage,
+                            defense_stage=defense_stage, hits=_h, target_hp=target_hp,
+                        )
+                        if not _v2.get("ok"):
+                            return _v2.get("empty_hint") or "计算失败。"
+                        if _first is None:
+                            _first = _v2
+                        _vals.append(int(_v2["result"]["total"]))
+            _vals.sort()
+            _n = len(_vals)
+            _r = _first["result"]
+            _pw_txt = (f"威力 {_P[0]}" if len(_P) == 1
+                       else f"威力 {_P[0]}~{_P[-1]}（{len(_P)} 档）")
+            _ht_txt = (f"连击 {_H[0]}" if len(_H) == 1
+                       else f"连击 {_H[0]}~{_H[-1]}（{len(_H)} 档）")
+            _lines = [
+                f"【区间推演】{_pw_txt}｜{_ht_txt}｜浮动 39 档",
+                f"期望 {sum(_vals) / _n:.0f} ｜ 中位 {_vals[_n // 2]}",
+                f"八成落 {_vals[_n // 10]}~{_vals[_n * 9 // 10]} ｜ "
+                f"范围 {_vals[0]}~{_vals[-1]}",
+                f"（枚举 {_n} 种取值；单段 {_r.get('single_channel', '?')}，"
+                f"口径同 seer_damage）",
+            ]
+            return sep.join(_lines) if 'sep' in dir() else chr(10).join(_lines)
+
+        # 单值模式：把 hits 从 str 还原成 int（参数为了兼容区间改成了 str）
+        try:
+            hits = max(1, int(str(hits).strip() or 1))
+        except (TypeError, ValueError):
+            return f"hits 认不出：{hits!r}（写整数如 \"1\"，或区间如 \"20~60\"）"
 
         # 全部判定（克制、浮动档位、乘区归区）来自 dmg_view（语义层，和 CLI 共用）
         v = self.kb.dmg_view(
