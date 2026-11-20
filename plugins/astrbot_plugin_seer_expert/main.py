@@ -5235,7 +5235,9 @@ Args:
         defend_type: str = "",
         type_mult: float = 0.0,
         type_mult_cap: float = 0.0,
-        stab: float = 1.0,
+        # ★ 2026-11-20：默认按本系 1.5（鱼片：没说就默认按本系）。
+        #   不是本系的技能要**显式**传 stab=1.0。
+        stab: float = 1.5,
         crit: float = 1.0,
         other: float = 1.0,
         random: str = "range",
@@ -5272,7 +5274,7 @@ Args:
         defend_type(string): 防守方属性，支持双属性如「草/冰」
         type_mult(float): 克制倍率。留空（0）且给了属性时自动算
         type_mult_cap(float): 克制倍率上限。0=不封顶；2.0 表示最多算到 2 倍
-        stab(float): 本系 1.5，否则 1.0
+        stab(float): **默认 1.5（按本系）**。不是本系的技能要显式写 1.0
         crit(float): 暴击 2.0，不暴击 1.0
         other(float): 其他乘算修正（优先用下面具体参数）
         random(string): 浮动。'range'/'min'/'max'/'avg' 或 217~255 的整数档
