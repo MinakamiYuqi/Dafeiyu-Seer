@@ -14,7 +14,7 @@ from datetime import datetime
 
 from astrbot.api import AstrBotConfig, llm_tool, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 from astrbot.core.message.components import Image as ImageComp
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
@@ -25,14 +25,6 @@ from .focus import clear_focus, is_active as focus_is_active, set_focus
 from .formula import estimate, explain, explain_settle, settle, combo_damage, explain_combo
 
 PLUGIN_NAME = "astrbot_plugin_seer_expert"
-
-
-@register(
-    PLUGIN_NAME,
-    "大肥鱼",
-    "赛尔号专家：精灵/技能/魂印/异常状态/属性克制/伤害估算，查不到就追问并记住答案。",
-    "0.1.0",
-)
 
 
 def _parse_span_spec(spec: str, *, lo: int = 1, hi: int = 400,
