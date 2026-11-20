@@ -5373,6 +5373,16 @@ Args:
             _vals.sort()
             _n = len(_vals)
             _r = _first["result"]
+            # ★ 单段只对连击（hits>1）有意义 —— 那条走 combo_damage 才有
+            #   single_channel；hits==1 走 settle 没有这个键，不显示即可。
+            _sc_lo = _r.get("single_channel")
+            _sc_hi = _r.get("single_channel_max")
+            if _sc_lo is None:
+                _seg_txt = ""
+            elif _sc_hi and _sc_hi != _sc_lo:
+                _seg_txt = f"；单段 {_sc_lo}~{_sc_hi}"
+            else:
+                _seg_txt = f"；单段 {_sc_lo}"
             _pw_txt = (f"威力 {_P[0]}" if len(_P) == 1
                        else f"威力 {_P[0]}~{_P[-1]}（{len(_P)} 档）")
             _ht_txt = (f"连击 {_H[0]}" if len(_H) == 1
@@ -5382,8 +5392,7 @@ Args:
                 f"期望 {sum(_vals) / _n:.0f} ｜ 中位 {_vals[_n // 2]}",
                 f"八成落 {_vals[_n // 10]}~{_vals[_n * 9 // 10]} ｜ "
                 f"范围 {_vals[0]}~{_vals[-1]}",
-                f"（枚举 {_n} 种取值；单段 {_r.get('single_channel', '?')}，"
-                f"口径同 seer_damage）",
+                f"（枚举 {_n} 种取值{_seg_txt}，口径同 seer_damage）",
             ]
             return sep.join(_lines) if 'sep' in dir() else chr(10).join(_lines)
 
