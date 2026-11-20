@@ -120,6 +120,14 @@ ROSTER_FIELDS = (
 FLAG_ATTACK = (1, 2)
 FLAG_STANDBY = 7
 
+#: 2052 MoreInfo 里 cur_title（当前称号）的字节偏移。
+#: 按 IronsBot MoreInfo.unpack 顺序推：user_id(4)+nick(16)+reg_time(4)
+#: +is_extreme_nono(1)+pet_all_num/pet_max_lev/total_class_wins/total_achieve
+#: /achie_shine/achie_rank 各 4 字节 = 49。
+#: ★ 49 是奇数 —— 按「偶数偏移 u16」或「4 字节对齐 u32」扫包会**永远扫不到**，
+#:   2026-11-20 之前因此误判成「2052 没有称号字段」。
+CUR_TITLE_OFFSET = 49
+
 
 def rank_display(rk: int, star: int) -> str:
     """圣皇满 100 星显示「宇宙圣皇」，纯装饰。"""
@@ -321,13 +329,29 @@ def query_roster_sync(target: int, account: str | None = None,
     h = _import_headless()
 
     out: dict = {"target": target, "queriedAt": time.time(),
-                 "roster": {}, "image": None, "error": None}
+                 "roster": {}, "profile": {}, "image": None, "error": None}
     sock = None
     try:
         sock, ser, uid = h.login(account, password)
         reader = _Reader(sock)
         sock.sendall(h.pack(41635, uid, struct.pack(">I", target), ser))
         out["roster"] = _parse_roster(reader.response(41635, timeout=8.0))
+
+        # 套装 / 独立部件 / 称号 —— 同一条连接顺手查完，不额外登录
+        clothes: list[tuple[int, int]] = []
+        cur_title = 0
+        try:
+            sock.sendall(h.pack(2051, uid, struct.pack(">I", target), ser))
+            clothes = _parse_2051_clothes(reader.response(2051, timeout=8.0))
+        except Exception as e:
+            out.setdefault("warnings", []).append(f"2051 套装读取失败: {type(e).__name__}")
+        try:
+            sock.sendall(h.pack(2052, uid, struct.pack(">I", target), ser))
+            cur_title = _parse_2052_last_int(
+                reader.response(2052, timeout=8.0), CUR_TITLE_OFFSET)
+        except Exception as e:
+            out.setdefault("warnings", []).append(f"2052 称号读取失败: {type(e).__name__}")
+        out["profile"] = _resolve_profile(clothes, cur_title)
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
     finally:
@@ -342,6 +366,116 @@ def query_roster_sync(target: int, account: str | None = None,
             out["image"] = _render(target, out["roster"], image_dir)
         except Exception as e:
             out.setdefault("warnings", []).append(f"渲染失败: {e}")
+    return out
+
+
+# ══════════════════════════════════════════════════════════
+# 套装 / 独立部件 / 称号（2051 + 2052）
+# ══════════════════════════════════════════════════════════
+def _parse_2051_clothes(data: bytes) -> list[tuple[int, int]]:
+    """从 2051 UserInfo 里取装备列表，返回 [(部件ID, 等级)]。
+
+    ★ **clothes 是 (部件ID, 等级) 交替**，不是一个 ID 数组再跟一个等级数组。
+      按后者拆会读出 [1301035, 0, 1301036, 0, …] 这种夹零乱值，
+      而且永远对不上 equip 表 —— 2026-11-20 之前就是这么错的。
+
+    字段顺序（IronsBot packets/user.py 的 UserInfo.unpack）：
+        user_id(4) nick(16) color(4) texture(4) vip(4) vip_flags(1)
+        status/map_type/map_id/is_can_be_teacher/teacher_id/student_id/
+        graduation_count/vip_level/team_id/team_is_show —— 10 个 u32
+        clothes_count(4) → 然后 clothes_count 组 (部件ID, 等级)
+    算下来 clothes 从 +77 开始，和实测包一致。
+    """
+    pos = 0
+
+    def u32() -> int:
+        nonlocal pos
+        v = struct.unpack_from(">I", data, pos)[0]
+        pos += 4
+        return v
+
+    if len(data) < 77:
+        return []
+    u32()               # user_id
+    pos += 16           # nick
+    u32()               # color
+    u32()               # texture
+    u32()               # vip
+    pos += 1            # vip_flags (u8)
+    for _ in range(10):  # status … team_is_show
+        u32()
+    n = u32()
+    if not 0 <= n <= 40 or pos + n * 8 > len(data):
+        return []
+    return [(u32(), u32()) for _ in range(n)]
+
+
+def _parse_2052_last_int(data: bytes, offset: int) -> int:
+    """按固定偏移取一个 u32；越界返回 0。"""
+    if len(data) < offset + 4:
+        return 0
+    return struct.unpack_from(">I", data, offset)[0]
+
+
+def _resolve_profile(clothes: list[tuple[int, int]], cur_title: int) -> dict:
+    """把部件 ID 归组成套装、把称号 ID 换成名字。全部走本地库。
+
+    返回 shape::
+        {"suit": {"id": 447, "name": "晨曦之星战甲", "parts": ["晨曦战盔", …]},
+         "extras": ["漫游者-AH"],
+         "title": {"id": 300, "name": "神话", "desc": "体力+100，防御+25，特防+25"}}
+    任一项查不到就缺省为空，调用方按「没有就不显示」处理。
+    """
+    import sqlite3
+
+    out: dict = {"suit": None, "extras": [], "title": None}
+    try:
+        con = sqlite3.connect("file:" + str(SEERAPI).replace("\\", "/") + "?mode=ro", uri=True)
+    except Exception:
+        return out
+    try:
+        by_suit: dict[int, list[str]] = {}
+        for eid, _lv in clothes:
+            row = con.execute("select name, suit_id from equip where id=?", (eid,)).fetchone()
+            if not row:
+                continue
+            name, sid = row
+            if sid:
+                by_suit.setdefault(int(sid), []).append(name)
+            else:
+                out["extras"].append(name)
+        if by_suit:
+            # 部件最多的那个套装当作「身上这套」
+            sid, parts = max(by_suit.items(), key=lambda kv: len(kv[1]))
+            srow = con.execute("select name from suit where id=?", (sid,)).fetchone()
+            suit_name = srow[0] if srow else f"套装{sid}"
+            out["suit"] = {"id": sid, "name": suit_name, "parts": parts}
+            # ★ 2026-11-20 修：原来只取「部件最多」的那套，**其余套装的部件直接丢掉**。
+            #   混搭（比如 3 件晨曦 + 3 件别的）时会凭空少报，用户看到的和身上穿的
+            #   对不上。这里把非主套装的部件也放进 extras，并标出它属于哪套。
+            #   并列时 max() 取字典序第一个，这个是可接受的（两套件数相同，
+            #   报哪套都只是「主套装」的选择问题，但部件不会再丢）。
+            for other_sid, other_parts in by_suit.items():
+                if other_sid == sid:
+                    continue
+                orow = con.execute("select name from suit where id=?", (other_sid,)).fetchone()
+                oname = orow[0] if orow else f"套装{other_sid}"
+                out["extras"].extend(f"{p}（{oname}）" for p in other_parts)
+        if cur_title:
+            trow = con.execute(
+                "select name, ability_desc from title_part where id=?", (cur_title,)
+            ).fetchone()
+            if trow:
+                out["title"] = {"id": cur_title, "name": trow[0], "desc": trow[1] or ""}
+            else:
+                out["title"] = {"id": cur_title, "name": f"称号{cur_title}", "desc": ""}
+    except Exception:
+        pass
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
     return out
 
 
@@ -443,15 +577,33 @@ async def query_roster_async(target: int, account: str | None = None,
 
 
 def format_roster(data: dict) -> str:
-    """阵容文字（配图用的简短说明）。"""
+    """阵容文字（配图用的简短说明）。
+
+    带上套装 / 独立部件 / 称号 —— 这三样才是「这个号现在什么状态」缺的部分。
+    ★ 查不到的项**整行不出现**，不要写「未获取/未知」，否则模型会自己补话。
+    """
     if data.get("error"):
         return f"查询 {data.get('target')} 阵容失败：{data['error']}"
     r = data.get("roster") or {}
+    prof = data.get("profile") or {}
     ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(data.get("queriedAt") or time.time()))
-    return (f"米米号 {data['target']} 阵容\n"
-            f"获取时间 {ts}\n"
-            f"共 {r.get('count', 0)} 只（出战 {len(r.get('attack') or [])} / "
-            f"待命 {len(r.get('standby') or [])}）")
+
+    lines = [f"米米号 {data['target']} 阵容", f"获取时间 {ts}"]
+
+    suit = prof.get("suit")
+    if suit:
+        lines.append(f"套装：{suit['name']}（{'、'.join(suit['parts'])}）")
+    extras = prof.get("extras") or []
+    if extras:
+        lines.append(f"独立部件：{'、'.join(extras)}")
+    title = prof.get("title")
+    if title:
+        desc = f"　{title['desc']}" if title.get("desc") else ""
+        lines.append(f"称号：{title['name']}{desc}")
+
+    lines.append(f"共 {r.get('count', 0)} 只（出战 {len(r.get('attack') or [])} / "
+                 f"待命 {len(r.get('standby') or [])}）")
+    return "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════════

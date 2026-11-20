@@ -98,5 +98,15 @@
     "description": "手册库同步间隔（小时）",
     "default": 24,
     "hint": "默认每天一次，启动后延迟 10 分钟跑首轮。上游大约 2~3 天发一次新包，调太小只是白跑。"
+  },
+  "dev_chat_log": {
+    "type": "bool",
+    "description": "把 bot 的私聊回复记进 plugin_data/_bot_chat.md（维护方排查用，默认关）",
+    "default": false
+  },
+  "dev_think_log": {
+    "type": "bool",
+    "description": "把 bot 的思考链记进 plugin_data/_bot_think.md（滚动保留最近 60 轮，默认关）",
+    "default": false
   }
 }

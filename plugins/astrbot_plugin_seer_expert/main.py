@@ -638,6 +638,57 @@ class SeerExpertPlugin(Star):
         t = text or ""
         return any(h in t for h in self.SEER_HINTS)
 
+    @filter.on_llm_response()
+    async def record_bot_reply(self, event: AstrMessageEvent, response=None) -> None:
+        """把 bot 自己的回复记一份 —— 只记私聊，配置开关默认关。
+
+        ★ 2026-11-18 加。之前三条路都拿不到 bot 说的话：
+          ① astrbot.log 不含 LLM 输出
+          ② traces.db 只有 span（plugin_handler / tool / message），没有文本
+          ③ conversations 表是 LLM 上下文快照，本机 11-17 16:19 就停更了
+        于是维护方想问「bot 到底回了什么」只能靠猜，今晚就吃过这个亏
+        （它报「⑤ 还是漏」，实际是旧上下文残留，但它自己的原话没人看得到）。
+
+        群里不记：量大、涉及别人；只记 FriendMessage。
+        写 plugin_data/_bot_chat.md，用 `_re/q.py chat` 读。
+        """
+        if not self._c("dev_chat_log", False):
+            return
+        try:
+            umo = str(getattr(event, "unified_msg_origin", "") or "")
+            if "FriendMessage" not in umo:
+                return
+            chain = getattr(response, "result_chain", None)
+            text = str((chain.get_plain_text() if chain is not None else "") or "").strip()
+            if not text:
+                return
+            asked = str(getattr(event, "message_str", "") or "")[:300].strip()
+            stamp = datetime.now().strftime("%m-%d %H:%M")
+            block = f"\n## {stamp}\n\n**你**：{asked}\n\n**bot**：{text[:4000]}\n"
+            path = os.path.join(self.data_dir, "_bot_chat.md")
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(block)
+
+            # ★ 2026-11-18：思考链单独记（默认关）。AstrBot 不把 reasoning 写日志，
+            #   但 LLMResponse.reasoning_content 里就有，钩子能直接读。
+            think = str(getattr(response, "reasoning_content", "") or "").strip()
+            if think and self._c("dev_think_log", False):
+                tpath = os.path.join(self.data_dir, "_bot_think.md")
+                old_txt = ""
+                if os.path.isfile(tpath):
+                    with open(tpath, encoding="utf-8", errors="replace") as fh:
+                        old_txt = fh.read()
+                # 滚动：只留最近 60 块，防止文件无限长大
+                chunks = old_txt.split("\n## ") if old_txt else []
+                keep = chunks[-59:] if len(chunks) > 60 else chunks
+                head = "\n## ".join(keep)
+                with open(tpath, "w", encoding="utf-8") as fh:
+                    if head:
+                        fh.write(head)
+                    fh.write(f"\n## {stamp}\n\n**问**：{asked}\n\n{think[:6000]}\n")
+        except Exception:  # noqa: BLE001
+            logger.debug("[赛尔] 记录 bot 回复失败", exc_info=True)
+
     @filter.on_llm_request()
     async def enforce_local_source(self, event: AstrMessageEvent, req=None):
         """赛尔号话题：禁止联网搜索/凭记忆，必须走本地库工具。"""
@@ -648,10 +699,20 @@ class SeerExpertPlugin(Star):
             chat_facts = self.kb.facts_for_chat(msg, 5)
         except Exception:
             chat_facts = []
-        # 只要命中玩家自己教过的规则，就当作赛尔话题处理
-        if not (self._looks_seer(msg) or self._focus_active(event) or chat_facts):
-            logger.info(f"[赛尔注入] 跳过（非赛尔话题）msg={msg[:30]!r}")
-            return
+        # ★ 2026-11-17：原来「只要召回任意规则就算赛尔话题」，而召回线只有 2 分，
+        #   结果「上下文占用还严重吗」这种闲聊也被注入了精灵机制规则（bot 的抱怨）。
+        #   现在：本身不像赛尔话题时，要求**强证据**（6 分）才注入。
+        _seer_like = self._looks_seer(msg) or self._focus_active(event)
+        if not _seer_like:
+            try:
+                _strong = self.kb.facts_for_chat(msg, 5, min_score=6)
+            except Exception:  # noqa: BLE001
+                _strong = []
+            if not _strong:
+                logger.info(f"[赛尔注入] 跳过（非赛尔话题，规则分数不足）msg={msg[:30]!r} "
+                            f"弱命中={len(chat_facts)} 条")
+                return
+            chat_facts = _strong
         logger.info(
             f"[赛尔注入] 进入 msg={msg[:36]!r} seer={self._looks_seer(msg)} "
             f"focus={self._focus_active(event)} facts={len(chat_facts)}"
@@ -2829,8 +2890,14 @@ class SeerExpertPlugin(Star):
             return False
         body = m.group(1)
 
-        # 明确的「空」标记
-        if "（空）" in body or "(空)" in body:
+        # 明确的「空」标记：**该节第一行非空内容以（空）开头**就算空。
+        # ★ 2026-11-17 三次修正的最终形态：
+        #   ① 子串判断 → 正文引用「（空）」也判空（有待验项时不提示）
+        #   ② 要求独占整行 → AGENTS 示范的 `**（空）** —— 没有需要你测的东西`
+        #      自带后缀，真·空板反而判成有活
+        #   现在：只看第一行开头，后面跟不跟说明都行。
+        _body_lines = [x for x in body.split("\n") if x.strip()]
+        if _body_lines and _re2.match(r"^\s*\*{0,2}[（(]空[）)]", _body_lines[0]):
             return False
 
         # 去掉 markdown 装饰后还剩几行实质内容
@@ -2847,8 +2914,10 @@ class SeerExpertPlugin(Star):
                 continue
             lines.append(t2)
 
-        # 至少要有几行像样的内容才算「有活」
-        return len(lines) >= 2
+        # 有一行实质内容就算有活。
+        # ★ 2026-11-17 原来要求 >=2，导致「只有 1 条待验项」的板子被判空、
+        #   bot 收不到提示 —— 而单条改动恰恰是最常见的情形。
+        return len(lines) >= 1
 
     def _dev_note_admins(self) -> list[str]:
         """取「开发通知收件人」的 QQ 号，只认纯数字。
@@ -3773,14 +3842,42 @@ class SeerExpertPlugin(Star):
         if v.get("ev_note"):
             lines.append(v["ev_note"])
         # ★ 2026-11-17：显式方向覆盖了专属配装时要提示 —— 不然群友会拿错数当权威。
+        # ★ 2026-11-17（bot 私聊指出）：两套并存时**两边都要提**，并给六项和差值。
+        #   原来只在「显式方向压过专属」时提一句，不传方向就闷着 ——
+        #   bot 21:03 因此以为数值漂了（4537 vs 4582）。
         _ov = v.get("own_override") or {}
+        _cur_total = (st.get("total") or 0) if _rows else 0
+        _eq_kw = dict(talent=talent, nature=nature, suit=suit, title=title,
+                      eye=eye, team_skip=team_skip)
         if _ov.get("mints"):
+            # 显式方向 → 另算一次「专属那套」
+            try:
+                _alt = self.kb.build_view(name, **_eq_kw)
+                _alt_total = int((_alt.get("stat") or {}).get("total") or 0)
+            except Exception:  # noqa: BLE001
+                _alt_total = 0
+            _gap = (f"，六项和 {_alt_total}（比上面少 {_cur_total - _alt_total}）"
+                    if _alt_total else "")
             lines.append(
                 "※ pet_build 里另有手工调过的专属配装："
                 + " + ".join(_ov["mints"])
                 + (f"（玩法 {_ov['soulmod']}）" if _ov.get("soulmod") else "")
+                + _gap
                 + "—— 上面是按你要的方向重挑的；要看专属那套就别传 preset"
             )
+        elif v.get("preset") == "专属":
+            # 走的是专属 → 反算一次「爆体预设」作对照
+            try:
+                _alt = self.kb.build_view(name, "爆体", **_eq_kw)
+                _alt_total = int((_alt.get("stat") or {}).get("total") or 0)
+            except Exception:  # noqa: BLE001
+                _alt_total = 0
+            if _alt_total:
+                lines.append(
+                    "※ 上面用的是 pet_build 里手工调过的专属配装；"
+                    f"按预设「爆体」是 {_alt_total}（差 {_alt_total - _cur_total:+d}）"
+                    "—— 想看预设那套就传 preset=\"爆体\""
+                )
         # 来源：专属配装还是预设表 —— 不写清的话，群友会以为是通用推荐
         if v.get("style") == "own" or v.get("preset") == "专属":
             lines.append("来源　pet_build 里手工调过的专属配装")
@@ -4416,9 +4513,14 @@ Args:
         _auto = []
         if team_skip:
             _auto.append(f"战队跳{team_skip}")
-        if _sm_auto.get("src"):
-            _auto.append(f"魂印派生={_sm_auto['src']}")
         _note = ("（自动：" + "、".join(_auto) + "）") if _auto else ""
+        # ★ 2026-11-17（bot 私聊指出）：派生只写「均分」两个字，看图的人不知道
+        #   1174 是怎么来的。config_view 的 notes 里本来就有完整算式，带出来即可。
+        _sm_lines = [str(n).replace("__CONT__", "")
+                     for n in (view.get("notes") or []) if "魂印" in str(n)]
+        if _sm_lines:
+            _note = (_note[:-1] + "；" if _note else "（") \
+                + "魂印派生：" + "；".join(_sm_lines) + "）"
         # ★ 把实际用上的配置原样回报 —— 之前只说「六项：xxx」，
         #   LLM 选错刻印（比如拿爆攻印顶双防位）外面完全看不出来，
         #   只能等群友看图发现。这不是「纠正用户」，是让他看见自己传了什么。
@@ -5968,9 +6070,10 @@ Args:
     async def seer_pvp(self, event: AstrMessageEvent, account: str) -> str:
         """查询某个米米号的巅峰战绩（段位 / 星数 / 胜场 / 胜率）。
 
-        # ⚠️ 使用条件
-        必须有人 @ 我 才能用。没被 @ 时**不要调这个工具**，直接回「要查战绩请 @我」。
-        用户只问胜率/段位/打了几场时用这个；**不要顺带查阵容**。
+        # 使用条件
+        不需要 @。用户明确要查**战绩、胜率、段位**时才调。
+
+        ★ 用户问「在不在线 / 在线吗」时**不要用这个** —— 那是 seer_online。
 
         # 能查到
         · 竞技 / 狂野 / 专家 / 大师 四个模式
@@ -5981,8 +6084,8 @@ Args:
         Args:
             account(string): 目标米米号，纯数字，如 "123456789"
         """
-        if not self._need_at(event):
-            return "查游戏内数据要 @我 才行。"
+        # 2026-11-19 鱼片：去掉「必须 @」的限制 —— bot 自己决定要不要调这个工具，
+        # 不需要用 @ 当门槛（模型不会因为别人的指令就乱调）。
         acc, pwd = self._seer_creds()
         if not acc or not pwd:
             return "查询失败：服务账号没配。请在插件配置里填 seer_account / seer_password。"
@@ -6012,9 +6115,11 @@ Args:
     async def seer_roster(self, event: AstrMessageEvent, account: str) -> str:
         """查询某个米米号的 12 只精灵阵容，并生成一张阵容图。
 
-        # ⚠️ 使用条件
-        必须有人 @ 我 才能用。没被 @ 时**不要调这个工具**，直接回「要查阵容请 @我」。
-        用户问阵容/出战/带了哪几只时用这个；**不要顺带查战绩**。
+        # 使用条件
+        不需要 @。用户明确要查**阵容、出战、带了哪几只**时才调。
+
+        ★ 用户问「在不在线 / 在线吗」时**不要用这个** —— 那是 seer_online。
+          这个工具会出阵容图，答非所问。
 
         # 产出
         一张阵容图（出战 6 + 待命 6），穿皮肤的角色显示皮肤头像。
@@ -6024,8 +6129,8 @@ Args:
         Args:
             account(string): 目标米米号，纯数字
         """
-        if not self._need_at(event):
-            return "查游戏内数据要 @我 才行。"
+        # 2026-11-19 鱼片：去掉「必须 @」的限制 —— bot 自己决定要不要调这个工具，
+        # 不需要用 @ 当门槛（模型不会因为别人的指令就乱调）。
         acc, pwd = self._seer_creds()
         if not acc or not pwd:
             return "查询失败：服务账号没配。请在插件配置里填 seer_account / seer_password。"
@@ -6057,6 +6162,57 @@ Args:
             if not _ok:
                 return format_roster(data) + "\n（图没发出去）"
         return format_roster(data)
+
+    @llm_tool(name="seer_online")
+    async def seer_online(self, event: AstrMessageEvent, account: str) -> str:
+        """查某个米米号的信息卡：在不在线 + 昵称 + VIP + 注册/登录/离线时间。
+
+        问「在线吗 / 在不在线 / 上线了没 / 在哪个服」调这个；
+        问「这号怎么样 / 查下这个号的信息」也调这个。
+
+        ★ 别用 seer_roster 代替 —— 那是查 12 只阵容（会出图），问在线时用它是答错的。
+
+        # 能查到
+        · 是否在线；在线时给服务器号
+        · 昵称、VIP 等级、是否至尊 NONO
+        · 注册时间 / 最后登录 / 最后离线（都是具体时刻）
+
+        # ★ 输出里没有的项就是没拿到，**不要补「地图没查到」之类的话**
+          地图只在服务端真给了非 0 值时才出现在结果里，没出现就是没有。
+
+        # 使用条件
+        不需要 @。
+
+        Args:
+            account(string): 目标米米号，纯数字，如 "123456789"
+        """
+        acc, pwd = self._seer_creds()
+        if not acc or not pwd:
+            return "查询失败：服务账号没配。请在插件配置里填 seer_account / seer_password。"
+        try:
+            target = int(str(account).strip())
+        except (TypeError, ValueError):
+            return f"查询失败：`{account}` 不是有效米米号（只要纯数字）。"
+        if not 0 < target <= 0xFFFFFFFF:
+            return "查询失败：米米号超出范围。"
+
+        from .seer_online import query_online_async, format_online
+
+        # 在线状态是瞬时的，缓存留短一点（60 秒），避免刚上线还报离线
+        key = f"online:{target}"
+        hit = self._seer_cache.get(key)
+        if hit and time.time() - hit[0] < 60:
+            return format_online(hit[1])
+        async with self._seer_io_lock:
+            hit = self._seer_cache.get(key)
+            if hit and time.time() - hit[0] < 60:
+                return format_online(hit[1])
+            try:
+                info = await query_online_async(target, acc, pwd)
+            except Exception as e:      # noqa: BLE001
+                return f"查询失败：{type(e).__name__}: {e}"
+            self._seer_cache[key] = (time.time(), info)
+        return format_online(info)
 
     # ── 夯拉榜（分级榜梗图）──────────────────────────────────
     def _tier_resolve(self, key) -> dict | None:
@@ -6675,3 +6831,4 @@ Args:
             msync.cancel()
             logger.info("[手册同步] 随 AstrBot 停止")
         self.kb.close()
+

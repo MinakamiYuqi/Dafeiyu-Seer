@@ -170,11 +170,25 @@ def settle(
     for e in [extra_reduce_pct] + [float(x) for x in (extra_reduce_more or [])]:
         reduce_factor *= 1 - min(e, 1.0)
     total_reduce = 1 - reduce_factor
-    attack = base * type_mult * stab * crit * (1 + general_add) * extra_factor * random_factor * other
-    after_reduce = attack * (1 - total_reduce)
+    # ── 伤害乘区：按赛学专栏（cv46281052）逐步取整 ──
+    # ★ 2026-11-20 改。专栏取整规则第 ③ 条：
+    #   「伤害浮动算完要取整，从浮动之后每一步计算都要向下取整」。
+    #   原来是全乘完只 floor 一次，后果是低威力高连击会被系统性高估：
+    #     冰王先三（威力1×90段）浮动 217 档 → 专栏 90，旧算法 180，整整一倍。
+    #   浮动取 255（上限档）时两种算法恰好重合，所以以前没暴露 ——
+    #   报出来的都是上限值。
+    #
+    #   顺序对齐专栏公式：
+    #     [方括号] × 本系 × 克制 → × 浮动 → × 暴击抗性 → × 暴击系数
+    #     → × 增伤 → × 减伤    （每一步都向下取整）
+    step1 = math.floor(base * type_mult * stab)
+    step2 = math.floor(step1 * random_factor)
+    step3 = math.floor(step2 * crit)
     if crit > 1:
         # 暴击抗性口径（已与用户确认）：实际倍率 = 2 × (1-抗性)，即整段 ×(1-抗性)
-        after_reduce *= 1 - crit_reduce_pct
+        step3 = math.floor(step3 * (1 - crit_reduce_pct))
+    step4 = math.floor(step3 * (1 + general_add) * extra_factor * other)
+    after_reduce = step4 * (1 - total_reduce)
     # 固伤：多段分别过抗性，每段先把「量」取整再过抗，最后相加
     flat_list = [float(x) for x in (flat_segments or [])]
     if flat_damage:

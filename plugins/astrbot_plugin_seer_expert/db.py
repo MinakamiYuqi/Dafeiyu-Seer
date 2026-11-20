@@ -9115,10 +9115,16 @@ class SeerKnowledge:
         scored.sort(key=lambda x: (-x[0], len(x[1])))
         return [(t, c) for _, t, c in scored[: int(limit)]]
 
-    def facts_for_chat(self, msg: str, limit: int = 6) -> list[tuple[str, str]]:
+    # 「私聊确认·」开头的是偏好/流程记录（例如「说话别太正式」），不是赛尔知识。
+    # 2026-11-17：它们以前也参与召回，闲聊一句就被当赛尔规则注入。
+    _CHAT_FACT_EXCLUDE = ("私聊确认·",)
+
+    def facts_for_chat(self, msg: str, limit: int = 6,
+                       min_score: int = 2) -> list[tuple[str, str]]:
         """从玩家这句话里召回相关已确认规则。
 
         topic 的任意「·」分段出现在原话里就算命中；别名（表哥/表姐等）额外扩展到对应精灵。
+        min_score：通过线。默认 2（宽松）；调用方判断「非赛尔话题」时应该传 6 之类的强证据线。
         """
         text = str(msg or "")[:400]
         if not text:
@@ -9130,6 +9136,9 @@ class SeerKnowledge:
             ).fetchall()
         except Exception:
             return []
+        # 偏好/流程类不参与赛尔规则召回（它们不是知识，注入只会占字数）
+        rows = [(t, c) for t, c in rows
+                if not any(str(t or '').startswith(x) for x in self._CHAT_FACT_EXCLUDE)]
 
         keys = set()
         for alias, targets in self.CHAT_ALIASES.items():
@@ -9238,7 +9247,7 @@ class SeerKnowledge:
                         if kw in text and kw in ctext
                     )
                     hit += 2 + min(extra, 3)
-            if hit >= 2:
+            if hit >= int(min_score):
                 scored.append((hit, t, str(content or "")))
         if not scored:
             return []
