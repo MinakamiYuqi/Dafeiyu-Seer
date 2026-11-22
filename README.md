@@ -132,8 +132,8 @@ cp -r Dafeiyu-Seer/plugins/astrbot_plugin_seer_info    <AstrBot 目录>/data/plu
 
 | 文件 | 内容 | 大小 |
 |---|---|---|
-| [seer_pet_configs.zip](https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/seer_pet_configs.zip) | 72 只精灵的配置图 + 面板数据（97 张） | 68 MB |
-| [seer_milk_dragon.zip](https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/latest/download/seer_milk_dragon.zip) | 26 张奶龙恶搞图 | 43 MB |
+| [seer_pet_configs.zip](https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/download/v1.1.1/seer_pet_configs.zip) | 72 只精灵的配置图 + 面板数据（97 张） | 68 MB |
+| [seer_milk_dragon.zip](https://github.com/MinakamiYuqi/Dafeiyu-Seer/releases/download/v1.1.1/seer_milk_dragon.zip) | 26 张奶龙恶搞图 | 43 MB |
 
 **解压到**：
 
