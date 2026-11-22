@@ -9,7 +9,7 @@
 
 协议来源
 --------
-· 40002 USER_FOREVER_VALUE：黑盒抓包实测（_re/无头客户端协议-20261106.md）
+· 40002 USER_FOREVER_VALUE：黑盒抓包实测（_re/无头客户端/无头客户端协议-20261106.md）
 · 41635 GET_USER_PET_INFO_BY_ID：反编译 GameLogic.dll（_re/lineup_followup/）
 
 ⚠️ 服务账号
@@ -39,7 +39,7 @@ _XM_CANDIDATES = [
     _HERE.parent / "_re" / "xm",          # ② 开发工作区
 ]
 # ③ 想额外指定一份：设环境变量 SEER_XM_DIR
-#   ★ 2026-11-23：这里原来是写死的 `<workspace>\_re\xm`（作者本机路径）。
+#   ★ 2026-11-23：这里原来是写死的 `G:\dsh workspace\_re\xm`（作者本机路径）。
 #     别人机器上必然不存在，虽然会被跳过、无害，但没必要把作者目录结构留在代码里。
 _extra_xm = os.environ.get("SEER_XM_DIR", "").strip()
 if _extra_xm:
