@@ -219,9 +219,10 @@ class SeerExpertPlugin(Star):
     _GUARD_HOST = "oss-us.dimenoss.com"
     _GUARD_PORT = 443
     _PROXY_PORT = 7890
-    _CLASH_LNK = (
-        r"C:\Users\user\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Clash Party.lnk"
-    )
+    # ★ 2026-11-23：这里原来写死了本机快捷方式路径（含 Windows 用户名）。
+    #   改成环境变量 SEER_PROXY_LAUNCHER（.lnk / .exe 的完整路径）；
+    #   留空 = 不做代理守护 —— 别人装上也不会去拉他自己的 Clash。
+    _CLASH_LNK = os.environ.get("SEER_PROXY_LAUNCHER", "")
 
     async def _tcp_ok(self, host: str, port: int, timeout: float = 3.0) -> bool:
         try:
@@ -372,7 +373,7 @@ class SeerExpertPlugin(Star):
         if not token:
             return False, "读不到 WebUI token"
         if not md5:
-            return False, "读不到密码 md5（G:/bot/napcat/.pwd_md5）"
+            return False, "读不到密码 md5（检查 NAPCAT_PWD_MD5_FILE 指向的文件）"
         base = f"http://127.0.0.1:{port}/api"
         try:
             h = hashlib.sha256((token + ".napcat").encode()).hexdigest()
@@ -687,7 +688,19 @@ class SeerExpertPlugin(Star):
             stamp = datetime.now().strftime("%m-%d %H:%M")
             block = f"\n## {stamp}\n\n**你**：{asked}\n\n**bot**：{text[:4000]}\n"
             path = os.path.join(self.data_dir, "_bot_chat.md")
-            with open(path, "a", encoding="utf-8") as fh:
+            # ★ 2026-11-23（十四号鱼）：**加滚动**。原来是纯 append，开关一开就会
+            #   无限长（单条上限 4000 字，一天十几条就是几十 KB，一年几 MB）。
+            #   留最近 200 块 ≈ 一周私聊量，够排查，也不会把磁盘吃掉。
+            old_chat = ""
+            if os.path.isfile(path):
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    old_chat = fh.read()
+            _chunks = old_chat.split("\n## ") if old_chat else []
+            _keep = _chunks[-199:] if len(_chunks) > 200 else _chunks
+            _head = "\n## ".join(_keep)
+            with open(path, "w", encoding="utf-8") as fh:
+                if _head:
+                    fh.write(_head)
                 fh.write(block)
 
             # ★ 2026-11-18：思考链单独记（默认关）。AstrBot 不把 reasoning 写日志，
@@ -1382,6 +1395,33 @@ class SeerExpertPlugin(Star):
             return not (event.get_group_id() or "")
         except Exception:
             return False
+
+    def _qq(self, event: AstrMessageEvent) -> str:
+        """取发消息那个人的 QQ 号 —— 兑换鉴权全靠它。
+
+        ★ 不能用 `unified_msg_origin` 的末段：群里那一段是**群号**，会把一整个群
+          当成同一个人。也不能用昵称（能改）。只认 sender 的 user_id。
+        """
+        for getter in (lambda: event.get_sender_id(),
+                       lambda: event.message_obj.sender.user_id):
+            try:
+                v = getter()
+                if v:
+                    return str(v)
+            except Exception:      # noqa: BLE001
+                continue
+        return ""
+
+    def _cmd_args(self, event: AstrMessageEvent) -> list[str]:
+        """取命令后面的参数（按空白切）。
+
+        ★ `message_str` 里**带着命令名本身**，而且用户可能不带 `/`（`绑定 123 pwd`
+          也能触发）。所以第一个 token 一律丢掉，别去判断它有没有斜杠 ——
+          2026-11-22 就是在这里翻的：不带 `/` 时把 "绑定" 当成了米米号，
+          回了一句「米米号看着不对」，实际参数完全没问题。
+        """
+        parts = (getattr(event, "message_str", "") or "").strip().split()
+        return parts[1:]
 
     def _rules_text(self) -> str:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules.md")
@@ -2944,12 +2984,12 @@ class SeerExpertPlugin(Star):
         """取「开发通知收件人」的 QQ 号，只认纯数字。
 
         2026-11-17 改：优先读插件配置的 `dev_notify_qq`。
-        原因：admins_id 里混着 bot 自己的号（1000000000），
+        原因：admins_id 里混着 bot 自己的号，
         直接发就成了「自己给自己发私聊」。
         但**不能**从 admins_id 里删掉 bot 自己 —— 那可能影响它的管理员权限判定。
 
         所以加一层专用配置：
-            dev_notify_qq = "1000000001"      ← 只发给这个号
+            dev_notify_qq = "<你的QQ号>"      ← 开发通知只发给这个号
         没配的话才回落 admins_id（用旧行为，但也没办法区分 bot 自己）。
 
         路径从 self.kb._kb_path 上溯 —— 那个是运行时真正读到的库，
@@ -5639,6 +5679,130 @@ Args:
         had = clear_focus(self._data_root, self._umo(event))
         yield event.plain_result("已退出专注模式。" if had else "当前不在专注模式。")
 
+    @filter.command("绑定")
+    async def cmd_bind_account(self, event: AstrMessageEvent):
+        """把 QQ 和游戏账号绑起来（**只在私聊**）。一个 QQ 可以绑多个号。"""
+        if not self._is_private(event):
+            yield event.plain_result("绑定只走私聊 —— 群里贴密码等于公开。")
+            return
+        args = self._cmd_args(event)
+        if len(args) < 2:
+            yield event.plain_result(
+                "用法：/绑定 米米号 密码\n"
+                "可以绑多个号，**第一个自动成为默认**（/兑换 不指定号时用它）。\n"
+                "只在私聊发，我不会回显密码。")
+            return
+        mmid_s, pwd = args[0].strip(), args[1].strip()
+        if not mmid_s.isdigit() or len(mmid_s) < 6:
+            yield event.plain_result("米米号看着不对（应该是 6 位以上的纯数字）。")
+            return
+        qq = self._qq(event)
+        if not qq:
+            yield event.plain_result("认不出你的 QQ 号，换私聊再试一次。")
+            return
+        try:
+            from .seer_redeem import bind as _bind
+            from .seer_redeem import describe_binds
+
+            became_default = _bind(self._data_root, qq, int(mmid_s), pwd)
+        except Exception as e:      # noqa: BLE001
+            yield event.plain_result(f"存不进去：{type(e).__name__}: {e}")
+            return
+        yield event.plain_result(
+            f"已绑定 {mmid_s}" + ("（默认号）" if became_default else "")
+            + "，密码加密保存、不会回显。\n"
+            + describe_binds(self._data_root, qq)
+            + "\n\n群里发 `兑换 兑换码` 就会换；要指定号就 `兑换 码 米米号`。\n"
+            + "（建议把刚才那条带密码的消息删掉）")
+
+    @filter.command("我的号", alias={"绑定列表"})
+    async def cmd_my_accounts(self, event: AstrMessageEvent):
+        """看看自己绑了哪些米米号、哪个是默认。"""
+        from .seer_redeem import describe_binds
+
+        yield event.plain_result(describe_binds(self._data_root, self._qq(event)))
+
+    @filter.command("默认")
+    async def cmd_set_default(self, event: AstrMessageEvent):
+        """把某个已绑的号设为默认。"""
+        args = self._cmd_args(event)
+        mmid_s = args[0].strip() if args else ""
+        if not mmid_s.isdigit():
+            yield event.plain_result("用法：/默认 米米号（得先 /绑定 过）")
+            return
+        from .seer_redeem import set_default
+
+        ok = set_default(self._data_root, self._qq(event), int(mmid_s))
+        yield event.plain_result(
+            f"默认号已改成 {mmid_s}。" if ok else f"你没绑过 {mmid_s}，先私聊 /绑定 加进来。")
+
+    @filter.command("兑换")
+    async def cmd_redeem_code(self, event: AstrMessageEvent):
+        """用绑定的账号兑换兑换码 —— **只认绑定本人的 QQ 号**。"""
+        qq = self._qq(event)
+        try:
+            from .seer_redeem import do_redeem, list_binds
+        except Exception as e:      # noqa: BLE001
+            yield event.plain_result(f"兑换模块加载失败：{type(e).__name__}: {e}")
+            return
+        if not qq or not list_binds(self._data_root, qq):
+            # 没绑定的人：群里一律不理（防别人借 bot 挤号），私聊才给用法
+            if self._is_private(event):
+                yield event.plain_result("你还没绑定账号。私聊发：/绑定 米米号 密码")
+            return
+        args = self._cmd_args(event)
+        code = args[0].strip() if args else ""
+        which = args[1].strip() if len(args) > 1 and args[1].strip().isdigit() else ""
+        if not code:
+            yield event.plain_result("用法：/兑换 兑换码 [米米号]（不给米米号就用默认号）")
+            return
+        yield event.plain_result("正在上号兑换，稍等…")
+        msg = await do_redeem(self._data_root, qq, code, int(which) if which else None)
+        yield event.plain_result(msg)
+
+    @filter.command("解绑")
+    async def cmd_unbind_account(self, event: AstrMessageEvent):
+        """删掉绑定关系和加密后的密码（给米米号就只删那个，不给就全删）。"""
+        args = self._cmd_args(event)
+        mmid_s = args[0].strip() if args else ""
+        qq = self._qq(event)
+        try:
+            from .seer_redeem import unbind as _unbind
+
+            n = _unbind(self._data_root, qq,
+                        int(mmid_s) if mmid_s.isdigit() else None) if qq else 0
+        except Exception as e:      # noqa: BLE001
+            yield event.plain_result(f"解绑失败：{type(e).__name__}: {e}")
+            return
+        yield event.plain_result(
+            f"已解绑 {n} 个号，密码从库里删掉了。" if n else "没解到（本来就没绑）。")
+
+    @llm_tool(name="seer_redeem")
+    async def tool_seer_redeem(self, event: AstrMessageEvent,
+                               code: str, account: str = "") -> str:
+        """帮用户把兑换码换到他**自己绑定的赛尔号**上（群里限量全民码，上号太慢时用）。
+
+        用户说「帮我换这个码 / 兑换码 XXX 换一下 / 这码顺便帮我换掉 / 用小号换」
+        这类都调这个。**只在用户把兑换码原文给你时才调**，别自己编码。
+
+        ★ 只能换到**发消息那个人自己绑的号**；换别人的号会失败 —— 那些是各人的私号，不是公共号。
+        ★ 用户没明确说要换到哪个号时，`account` 留空，走他默认绑定的那个。
+
+        Args:
+            code(string): 兑换码原文，**原样传**，别改大小写、别翻译、别加空格
+            account(string): 米米号；用户没明确指定就留空
+        """
+        qq = self._qq(event)
+        try:
+            from .seer_redeem import do_redeem, list_binds
+        except Exception as e:      # noqa: BLE001
+            return f"兑换模块加载失败：{type(e).__name__}: {e}"
+        if not qq or not list_binds(self._data_root, qq):
+            return "这个人还没绑账号。让他私聊我发 `/绑定 米米号 密码`，绑完再换。"
+        a = str(account or "").strip()
+        which = int(a) if a.isdigit() and len(a) >= 6 else None
+        return await do_redeem(self._data_root, qq, str(code or "").strip(), which)
+
     @filter.command("配招")
     async def cmd_show_moveset(self, event: AstrMessageEvent):
         """查看库里已定型的配招原文（不查外部数据源）。"""
@@ -6306,6 +6470,226 @@ Args:
                 return f"查询失败：{type(e).__name__}: {e}"
             self._seer_cache[key] = (time.time(), info)
         return format_online(info)
+
+    # ── 巅峰看板（数据由本地监控进程整理，bot 只负责搬运和出图）──────
+    async def _arena_send(self, event, data: bytes, label: str) -> bool:
+        """把渲染好的 PNG 落地并发出去。"""
+        path = os.path.join(str(self.data_dir), f"arena_{label}.png")
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            logger.warning(f"[arena] 图片落盘失败：{e}")
+            return False
+        # ★ 2026-11-23（十四号鱼）：玩家战绩图是 `arena_player_<uid>.png`，一人一张、
+        #   只增不减（实测 8 张 2.8 MB，攒一年能到几百 MB，比数据库还大）。
+        #   每发一次图顺手清一次：超 7 天的删、超过 200 张的按旧到新删（见 V.prune_pngs）。
+        #   看板那三张是固定名、每次覆盖，不在清理范围。
+        try:
+            gone = V.prune_pngs(str(self.data_dir))
+            if gone:
+                logger.info(f"[arena] 清理过期战绩图 {gone} 张")
+        except Exception:      # noqa: BLE001
+            logger.debug("[arena] 清理临时图失败", exc_info=True)
+        return await self._send_image(event, path, label)
+
+    @llm_tool(name="seer_arena_board")
+    async def seer_arena_board(self, event: AstrMessageEvent,
+                               kind: str = "pets", top: int = 20,
+                               suit: str = "") -> str:
+        """查「巅峰战绩看板」：榜单前列玩家的精灵/套装战绩排行，并出一张图。
+
+        数据来自本地监控进程整理的看板（不是实时查游戏），可能有几分钟延迟。
+
+        问「哪只精灵强 / 什么套装胜率高 / 榜单前列都在用什么」调这个：
+        · kind="pets"  精灵 × 套装 战绩榜（默认，最常用）—— 按套装分区，
+          每个套装一块，块内按分析得分降序，序号跨套装连续
+        · kind="suits" 套装汇总（各套装整体得分率）
+        · kind="dist"  套装实战分布（哪些套装真有人穿去打）
+
+        ★ 只想看一个套装时传 suit（例如 suit="晨曦"），会只出那一块，图短很多。
+
+        ★ 口径必须照实说：**携带口径** —— 一场赢，当时携带的精灵各记 1 场 1 胜，
+        所以各精灵的场次**不能相加**；平局按 0.5 胜计。数据只覆盖监控队列（榜单前列），
+        不是全服。**别把「总场」说成「出场多」**，也别把得分当成官方胜率。
+
+        Args:
+            kind(string): pets=精灵榜 / suits=套装汇总 / dist=套装分布，默认 pets
+            top(int): 文字摘要里每个套装列几只（摘要最多列 5；**图里始终是全量**）
+            suit(string): 只出这一个套装（名字包含即可，如「晨曦」「影翼」），默认全部
+        """
+        from . import seer_arena_view as V
+
+        kind = str(kind or "pets").strip().lower()
+        if kind not in ("pets", "suits", "dist"):
+            return f"kind 只能是 pets / suits / dist，收到「{kind}」。"
+        try:
+            top = max(5, min(60, int(top)))
+        except (TypeError, ValueError):
+            top = 20
+        suit = str(suit or "").strip()
+        board = V.load_board(str(self.data_dir))
+        if not board:
+            return ("巅峰看板还没生成（监控进程没跑或还没到第一轮刷新）。"
+                    "本地跑一次 arena_monitor.materialize_board() 就有。")
+        try:
+            data = await V.render_board(board, kind, top=top, suit=suit)
+        except Exception as e:      # noqa: BLE001
+            return f"看板出图失败：{type(e).__name__}: {e}"
+
+        cov = board.get("coverage") or {}
+        lines = [f"**{ {'pets': '精灵×套装战绩榜', 'suits': '套装汇总', 'dist': '套装实战分布'}[kind] }**",
+                 f"数据时间 {board.get('generated_at', '-')}"
+                 f"｜归因覆盖 {cov.get('pct', '-')}%（{cov.get('attributed', 0)}/{cov.get('matches', 0)} 场）"]
+        if kind == "pets":
+            names = board.get("pet_names") or {}
+            per_block = max(1, min(top, 5))      # 摘要每块条数跟 top 走，最多 5（文字太长没人看）
+            shown = 0
+            for g in (board.get("pets_by_suit") or []):
+                sname = g.get("suit") or "未识别"
+                if suit and suit not in sname:
+                    continue
+                rows = g.get("rows") or []
+                if not rows:
+                    continue
+                lines.append(f"\n**{sname}**（{len(rows)} 只 · {g.get('matches')} 总场）")
+                for i, p in enumerate(rows[:per_block], 1):
+                    nm = names.get(str(p.get("monster_id")), f"ID {p.get('monster_id')}")
+                    # ★ 2026-11-21（十三号鱼）：文字层也要标平局。原来只有图的胜率列有 *，
+                    #   看文字的人遇到「0 胜 1 总场 50%」会以为算错了（bot 23:55 验收提的）。
+                    draw = "*" if p.get("draws") else ""
+                    lines.append(f"{i}. {nm} {p.get('matches')} 总场 "
+                                 f"{p.get('rate')}%{draw}｜得分 {p.get('score')}｜"
+                                 f"{p.get('grade_cn') or p.get('grade')}（{p.get('grade')}）")
+                shown += 1
+                if shown >= 6 and not suit:
+                    lines.append("\n（图里是全部套装，这里只列前 6 块）")
+                    break
+            if not shown:
+                lines.append(f"没有匹配「{suit}」的套装数据。")
+            lines.append(f"\n（文字摘要每块最多列 {per_block} 只（跟 top 走，上限 5），"
+                         "完整榜单看上面那张图）")
+        elif kind == "suits":
+            for s in (board.get("suits") or [])[:8]:
+                if s.get("rate") is None:
+                    lines.append(
+                        f"· {s.get('name')}：{s.get('players')} 人打了 "
+                        f"{s.get('real_matches')} 局，**全部未归因**"
+                        f"（换装后打的那局验不出来，不计入胜率）")
+                    continue
+                extra = f"，另有 {s['unattributed']} 局未归因" if s.get("unattributed") else ""
+                lines.append(f"· {s.get('name')}：{s.get('rate')}%"
+                             f"（{s.get('matches')} 人次场 / {s.get('players')} 人{extra}）")
+        else:
+            for d in (board.get("suit_dist") or [])[:6]:
+                few = (d.get("players") or 0) < 3
+                lines.append(f"· {d.get('name')}：{d.get('pct')}%"
+                             f"（{d.get('matches')} 局 / {d.get('players')} 人"
+                             + ("，样本少，别当强度看" if few else "") + "）")
+        # ★ 2026-11-21：心跳停了就是监控挂了。以前只能靠人翻日志时间才发现。
+        hb = V.load_heartbeat(str(self.data_dir))
+        # ★ 2026-11-23（十四号鱼）：**先问「这个点该不该有新鲜数据」再决定报不报警**。
+        #   原来只判 age_min > 15、不知道竞技几点关门 —— 23:30 收盘后、每天 10:55
+        #   起采前，任何一次问榜都会白报「监控可能挂了」（2026-11-22 23:08 被群友抓包：
+        #   「竞技 23:30 就关门了，那我那条『监控挂了』白报了」）。假警报还会淹没真故障。
+        _mst = V.monitor_state(hb) if hb else {}
+        _age = _mst.get("data_age_min")
+        _stale = _age is not None and _age > 15
+        _last = (_mst.get("last_collect") or (hb or {}).get("iso") or "-")
+        if hb and _stale and _mst.get("should_be_fresh") is False:
+            _end = _mst.get("window_end")
+            _when = (f"，下一个窗口 {_mst['next_open_hm']} 开"
+                     if _mst.get("next_open_hm") else "")
+            lines.append(f"\n⏸ 竞技{'已关门（' + _end + ' 收）' if _end else '不在开放时段'}，"
+                         f"数据停在 {_last}{_when}。这是正常作息，不是监控挂了。")
+        elif hb and _stale:
+            lines.append(f"\n⚠ 监控已经 **{_age:.0f} 分钟**没刷新了"
+                         f"（最后采集 {_last}），这份数据可能是旧的 —— "
+                         "监控进程可能挂了，跟维护者说一声。")
+        lines.append("\n口径：携带口径（一场赢 → 携带的精灵各记 1 场 1 胜，**不可相加**；"
+                     "1 局 ≈ 12 人次场）；平局按 0.5 胜。"
+                     "胜率带 `*` 的精灵**有平局**（这个胜率其实是得分率，平局算半胜 ——"
+                     " 所以会出现「0 胜但 50%」，图里星号同此含义）。"
+                     "**只统计竞技模式** —— 狂野 / 专家 / 大师的对局不在内。"
+                     "仅统计监控队列（榜单前列）内的号。")
+        ok = await self._arena_send(event, data, f"board_{kind}")
+        if not ok:
+            lines.append("（图没发出去）")
+        return "\n".join(lines)
+
+    @llm_tool(name="seer_arena_player")
+    async def seer_arena_player(self, event: AstrMessageEvent,
+                                account: str, days: int = 7) -> str:
+        """查某个米米号**近 N 天**的巅峰战绩（每日场次/胜/平/得分率 + **用什么打的**），并出一张图。
+
+        图里分两块：
+        · 上半 日战绩（按天）
+        · 下半「用什么打的」—— 按套装分组，列他带的精灵 + 各自场次/胜率
+
+        问「xx 号最近战绩怎么样 / 这几天胜率如何 / 他用的什么阵容」都调这个。
+        ★ 和 seer_pvp 的区别：seer_pvp 是游戏内赛季累计（段位+总场），
+        这个是**本地监控按天记录**的近期表现。
+
+        # 查不到的情况（别硬答）
+        · 这个号不在监控队列里（榜单前列之外）→ 会说「没有采集到」
+        · 监控是今天才开始跑的，历史天数还没积累 → 再等几天
+        · 只覆盖竞技场对局，练习赛、离线状态都不算
+        · **阵容那块只含「阵容验得出来的局」**：如果他在采样间隔里打完又换了精灵，
+          那局判成「归因未知」，只进日战绩、不进阵容明细 —— 所以阵容合计可能比
+          日战绩少几场，这是正常的，别说是漏记
+
+        Args:
+            account(string): 目标米米号，纯数字
+            days(int): 看最近几天（默认 7，最多 30）
+        """
+        from . import seer_arena_view as V
+
+        try:
+            uid = int(str(account).strip())
+        except (TypeError, ValueError):
+            return f"「{account}」不是有效米米号（只要纯数字）。"
+        try:
+            days = max(1, min(30, int(days)))
+        except (TypeError, ValueError):
+            days = 7
+        rows = V.player_rows(str(self.data_dir), uid, days)
+        loadouts = V.player_loadouts(str(self.data_dir), uid, days)
+        try:
+            data = await V.render_player(uid, rows, loadouts)
+        except Exception as e:      # noqa: BLE001
+            return f"战绩图渲染失败：{type(e).__name__}: {e}"
+        if not rows:
+            head = (f"**{uid}** 近 {days} 天没有采集到对局。"
+                    "（这号可能不在监控队列里 —— 本地只盯榜单前 250 名；"
+                    "或者这几天没打**竞技**场）")
+        else:
+            tot_m = sum(r["matches"] for r in rows)
+            tot_w = sum(r["wins"] for r in rows)
+            tot_d = sum(r["draws"] for r in rows)
+            rate = ((tot_w + 0.5 * tot_d) / tot_m * 100) if tot_m else None
+            head = (f"**{uid}** 近 {days} 天：{len(rows)} 个活跃日，"
+                    f"**{tot_m} 场 / {tot_w} 胜"
+                    + (f" / {tot_d} 平" if tot_d else "")
+                    + (f" / 得分率 {rate:.1f}%**" if rate is not None else "**"))
+            per = [f"· {r['date']}：{r['matches']} 场 {r['wins']} 胜"
+                   + (f" {r['draws']} 平" if r["draws"] else "")
+                   + (f"（{r['rate']}%）" if r["rate"] is not None else "")
+                   for r in rows[:7]]
+            head += "\n" + "\n".join(per)
+            if loadouts:
+                head += "\n\n**用什么打的**（按套装分组，携带口径）"
+                for g in loadouts[:3]:
+                    nm = "、".join(p["name"] for p in g["pets"][:8])
+                    more = f"…共 {len(g['pets'])} 只" if len(g["pets"]) > 8 else ""
+                    rate = f" {g['rate']:.1f}%" if g.get("rate") is not None else ""
+                    head += (f"\n· {g['suit']}：{g['matches']} 局 {g['wins']} 胜{rate}"
+                             f"\n　{nm}{more}")
+            head += "\n（**只统计竞技模式**的场次；狂野 / 专家 / 大师打了不算 —— " \
+                    "所以「打得比这个多」是正常的，不是漏记）"
+        ok = await self._arena_send(event, data, f"player_{uid}")
+        if not ok:
+            head += "\n（图没发出去）"
+        return head
 
     # ── 夯拉榜（分级榜梗图）──────────────────────────────────
     def _tier_resolve(self, key) -> dict | None:

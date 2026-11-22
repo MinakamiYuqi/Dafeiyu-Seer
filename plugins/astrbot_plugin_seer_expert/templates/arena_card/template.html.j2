@@ -1,0 +1,172 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#0f1420;color:#e8eefc}
+.wrap{width:980px;padding:22px 26px;background:linear-gradient(160deg,#131a2a,#0c1220)}
+h1{font-size:22px;font-weight:700;letter-spacing:.4px}
+.sub{color:#7f8ea8;font-size:12px;margin-top:5px}
+.stats{display:flex;gap:10px;margin:14px 0 16px}
+.card{flex:1;background:#1a2233;border-radius:10px;padding:9px 12px}
+.card .k{font-size:11px;color:#7f8ea8}
+.card .v{font-size:17px;font-weight:700;color:#8fd0ff;margin-top:2px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:#7f8ea8;font-weight:600;font-size:11px;padding:6px 8px;border-bottom:1px solid #24304a}
+td{padding:5px 8px;border-bottom:1px solid #1b2334}
+.no{color:#5c6a83;width:26px;font-size:12px}
+.name{font-weight:600}
+.suit{color:#9fb0c9;font-size:12px}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.bar{height:5px;background:#243049;border-radius:3px;overflow:hidden;width:64px;display:inline-block;vertical-align:middle;margin-right:6px}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,#3d7ee8,#67d0ff)}
+.g{display:inline-block;min-width:28px;text-align:center;font-size:11px;font-weight:700;border-radius:4px;padding:1px 5px}
+.g-SSS,.g-SS{background:#4b2a6b;color:#e0b3ff}
+.g-S{background:#1f3d5c;color:#8fd0ff}
+.g-A{background:#1f3a2c;color:#7fdca0}
+.g-B,.g-C,.g-D{background:#2a2f3d;color:#9aa7bb}
+.rng{color:#7f8ea8;font-size:11px}
+.tot{margin-top:10px;padding:9px 12px;background:#1a2233;border-radius:8px;font-size:13px}
+.sect{margin-top:18px}
+.stitle{font-size:15px;font-weight:700;color:#cfe3ff;padding:0 0 7px;border-bottom:2px solid #2a3a55;margin-bottom:2px}
+.stitle .scount{font-size:11px;color:#7f8ea8;font-weight:400;margin-left:10px}
+/* ★ 2026-11-21 照小苍星成品图：套装标题行 / 表头行也占序号，整张表连排 */
+table.pets tr.suitrow td{background:#1b2740;color:#cfe3ff;font-size:14px;font-weight:700;
+  padding:8px;border-top:2px solid #2f4262;border-bottom:1px solid #2f4262}
+table.pets tr.subhdr td{background:#161d2c;color:#7f8ea8;font-size:11px;font-weight:600}
+table.pets tr.subhdr .name{font-weight:400}
+/* 单个号的「用什么打的」区块 */
+.lo{margin-top:10px}
+.lohead{font-size:13px;color:#cfe3ff;padding:5px 8px;background:#1b2740;border-radius:6px}
+.petsgrid{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.chip{background:#1a2233;border:1px solid #24304a;border-radius:6px;padding:3px 8px;font-size:12px;color:#dfe8f7}
+.chip i{color:#7f8ea8;font-style:normal;font-size:11px;margin-left:5px}
+/* 平局标记：胜率列带 * = 含平局，按 0.5 胜折算（所以会出现「0 胜但 50%」） */
+.dmark{color:#f0b24b;font-weight:700;margin-left:1px}
+footer{margin-top:14px;color:#5c6a83;font-size:11px;line-height:1.7}
+</style></head>
+<body><div class="wrap">
+<h1>{{ title }}</h1>
+<div class="sub">{% if generated_at %}数据时间 {{ generated_at }}{% endif %}{% if coverage %}　·　归因覆盖 {{ coverage.pct }}%（{{ coverage.attributed }}/{{ coverage.matches }} 场）{% endif %}</div>
+
+{% if mode == "player" %}
+<table>
+<tr><th>日期</th><th class="num">场次</th><th class="num">胜</th><th class="num">平</th><th>得分率</th></tr>
+{% for r in rows %}
+<tr>
+  <td class="name">{{ r.date }}</td>
+  <td class="num">{{ r.matches }}</td>
+  <td class="num">{{ r.wins }}</td>
+  <td class="num">{{ r.draws }}</td>
+  <td>{% if r.rate is not none %}<span class="bar"><i style="width:{{ r.rate }}%"></i></span><b>{{ r.rate }}%</b>{% else %}<span class="rng">当天没打</span>{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+{% if rows %}
+<div class="tot">近 {{ rows|length }} 天合计：<b>{{ totals.matches }}</b> 场 / <b>{{ totals.wins }}</b> 胜
+{% if totals.draws %} / {{ totals.draws }} 平{% endif %}　得分率
+<b>{% if totals.rate is not none %}{{ totals.rate }}%{% else %}-{% endif %}</b></div>
+{% else %}
+<p class="rng" style="margin-top:14px">这个号近期没有采集到对局（可能是没在上榜区间内，或者一直没打）。</p>
+{% endif %}
+{% if loadouts %}
+{# ★ 2026-11-21 鱼片：查单个号时也要能看出「用什么打的」。 #}
+<div class="sect" style="margin-top:16px">
+  <div class="stitle">用什么打的<span class="scount">按套装分组 · 携带口径 · 只含阵容验得出来的对局</span></div>
+  {% for g in loadouts %}
+  <div class="lo">
+    <div class="lohead"><b>{{ g.suit }}</b>　{{ g.matches }} 局 {{ g.wins }} 胜{% if g.draws %} {{ g.draws }} 平{% endif %}{% if g.rate is not none %}　<b>{{ g.rate }}%</b>{% endif %}</div>
+    <div class="petsgrid">
+      {% for p in g.pets %}<span class="chip">{{ p.name }}{% if p.matches %}<i>{{ p.matches }}场{% if p.rate is not none %} {{ p.rate }}%{% endif %}</i>{% endif %}</span>{% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% elif mode == "suits" %}
+<table>
+<tr><th>套装</th><th class="num">人次场</th><th class="num">胜场</th><th class="num">人数</th><th>得分率</th></tr>
+{% for s in suits %}
+<tr>
+  <td class="name">{{ s.name }}</td>
+  <td class="num">{{ s.matches }}</td>
+  <td class="num">{{ s.wins }}</td>
+  <td class="num">{{ s.players }}</td>
+  <td>{% if s.rate is not none %}<span class="bar"><i style="width:{{ s.rate }}%"></i></span><b>{{ s.rate }}%</b>{% if s.unattributed %}<span class="rng">＋{{ s.unattributed }} 局未归因</span>{% endif %}{% else %}<span class="rng">{{ s.real_matches }} 局全部未归因（换装后打的那局验不出来）</span>{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+
+{% elif mode == "dist" %}
+<table>
+<tr><th>套装</th><th class="num">对局数</th><th class="num">使用人数</th><th>占全部对局</th></tr>
+{% for d in dist %}
+<tr>
+  <td class="name">{{ d.name }}</td>
+  <td class="num">{{ d.matches }}</td>
+  <td class="num">{{ d.players }}{% if d.players < 3 %}<span class="rng">（样本少）</span>{% endif %}</td>
+  <td><span class="bar"><i style="width:{{ d.pct }}%"></i></span><b>{{ d.pct }}%</b></td>
+</tr>
+{% endfor %}
+</table>
+
+{% else %}
+{# ★ 2026-11-21 照小苍星成品图重做：
+   一张长表，按套装分区；套装标题行和表头行**也占序号**，序号跨套装连续
+   （他的图：晨曦 1~94，95=影翼裁决标题，96=表头，97~155=影翼数据，156=腐蚀者标题…） #}
+{% set ns = namespace(n = 0) %}
+<table class="pets">
+{% for g in groups %}
+  {% set ns.n = ns.n + 1 %}
+  <tr class="suitrow">
+    <td class="no">{{ ns.n }}</td>
+    <td colspan="6"><b>{{ g.suit }}</b>{% if g.count %}　{{ g.count }} 只 · {{ g.matches }} 总场{% endif %}</td>
+  </tr>
+  {% set ns.n = ns.n + 1 %}
+  <tr class="subhdr">
+    <td class="no">{{ ns.n }}</td>
+    <td>精灵</td><td class="num">胜率</td><td class="num">胜场</td>
+    <td class="num">总场</td><td class="num">分析得分</td><td>评级(D-SSS)</td>
+  </tr>
+  {% for p in g.rows %}
+  {% set ns.n = ns.n + 1 %}
+  <tr>
+    <td class="no">{{ ns.n }}</td>
+    <td class="name">{{ p.name }}</td>
+    <td class="num">{{ "%.2f"|format(p.rate) }}%{% if p.draws %}<span class="dmark">*</span>{% endif %}</td>
+    <td class="num">{{ p.wins }}</td>
+    <td class="num">{{ p.matches }}</td>
+    <td class="num">{{ "%.2f"|format(p.score) }}</td>
+    <td><span class="g g-{{ p.grade }}">{% if p.grade_cn and p.grade_cn != p.grade %}{{ p.grade_cn }}({{ p.grade }}){% else %}{{ p.grade }}{% endif %}</span></td>
+  </tr>
+  {% endfor %}
+{% endfor %}
+</table>
+{% if not groups %}
+{# 老看板 JSON 没有 pets_by_suit 时退回混排榜，别出空白图 #}
+<table>
+<tr><th class="no">#</th><th>精灵</th><th>套装</th><th class="num">胜率</th><th class="num">总场</th><th class="num">分析得分</th><th>评级</th></tr>
+{% for p in pets %}
+<tr>
+  <td class="no">{{ loop.index }}</td>
+  <td class="name">{{ p.name }}</td>
+  <td>{{ p.suit }}</td>
+  <td class="num">{{ "%.2f"|format(p.rate) }}%{% if p.draws %}<span class="dmark">*</span>{% endif %}</td>
+  <td class="num">{{ p.matches }}</td>
+  <td class="num">{{ "%.2f"|format(p.score) }}</td>
+  <td><span class="g g-{{ p.grade }}">{% if p.grade_cn and p.grade_cn != p.grade %}{{ p.grade_cn }}({{ p.grade }}){% else %}{{ p.grade }}{% endif %}</span></td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endif %}
+
+<footer>
+口径：<b>携带口径</b> —— 一场对局赢，当时携带的精灵各记 1 场 1 胜，所以<b>各精灵的场次不能相加</b>
+（换过来：<b>1 局 ≈ 12 人次场</b>，「人次场」和「局」不是同一量级）；
+平局按 0.5 胜计（胜率带 <span class="dmark">*</span> 的精灵里有平局，所以会出现「0 胜但 50%」——
+这个「胜率」其实是<b>得分率</b>，平局算半胜）；分析得分 = 矫正胜率经 log² 场次权重与 atan 压缩后的 0~100 分；
+评级按分档（SSS≥88 / SS≥80 / S≥71 / A≥62 / B≥40 / C≥25 / D&lt;25）。
+<b>只统计竞技模式</b>：狂野 / 专家 / 大师的对局不在内，所以「我打得比这多」是正常的。
+数据只覆盖监控队列里的号（榜单前列），不是全服。
+</footer>
+</div></body></html>

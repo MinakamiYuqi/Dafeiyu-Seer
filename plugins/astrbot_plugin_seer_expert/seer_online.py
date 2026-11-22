@@ -238,5 +238,8 @@ if __name__ == "__main__":
 
     # 单独跑要先把插件目录加进 sys.path（包内运行时走相对导入，不需要）
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    t = int(sys.argv[1]) if len(sys.argv) > 1 else 123456789
+    if len(sys.argv) < 2:
+        print("用法: python seer_online.py <米米号>")
+        raise SystemExit(1)
+    t = int(sys.argv[1])
     print(format_online(query_online(t)))

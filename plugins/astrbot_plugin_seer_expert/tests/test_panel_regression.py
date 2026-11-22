@@ -70,7 +70,9 @@ def test_xuanwu_full_panel(k):
     ],
 )
 def test_pet_build_mints(k, name, want_mints):
-    assert k.build_view(name, "爆攻").get("mints") == want_mints
+    # 不传方向 = 自动：有 pet_build 记录就用它。
+    # （2026-11-17 起显式传「爆攻」会按那个方向重挑，是 mint_view 一直以来的语义）
+    assert k.build_view(name).get("mints") == want_mints
 
 
 # ── 4. 魂印自动识别 ──────────────────────────────────────────────────────

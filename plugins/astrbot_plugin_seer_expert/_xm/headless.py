@@ -29,8 +29,11 @@
 
 用法：
   python headless.py login
-  python headless.py pvp 123456789
-  python headless.py lineup 123456789
+  python headless.py pvp <目标米米号>
+  python headless.py lineup <目标米米号>
+
+服务账号与密码只从环境变量读（SEER_ACCOUNT / SEER_PASSWORD），
+**代码里不留任何真实米米号** —— 它只是查询目标，用谁看你自己的号填谁。
 """
 from __future__ import annotations
 
@@ -46,7 +49,13 @@ from pathlib import Path
 GAME_HOST = "175.24.235.221"
 GAME_PORT = 1225
 AUTH_URL = "https://account-co.61.com/index.php"
-DEBUG = False
+DEBUG = os.environ.get("SEER_HEADLESS_DEBUG", "").strip() in ("1", "true", "yes", "on")
+
+
+def _log(msg: str) -> None:
+    """诊断输出。默认静音 —— 每次查询都打 4 行会把 bot 日志灌满（2026-11-21 改）。"""
+    if DEBUG:
+        print(msg)
 
 TAIL_PATH = Path(os.environ.get("TEMP", "/tmp")) / "login_tail.txt"
 
@@ -157,16 +166,16 @@ def fetch_session(account: str, password: str) -> bytes:
 def login(account: str, password: str, timeout: float = 15.0):
     uid = int(account)
     session = fetch_session(account, password)
-    print(f"[1] session 拿到（{len(session)} 字节）")
+    _log(f"[1] session 拿到（{len(session)} 字节）")
 
     sock = socket.create_connection((GAME_HOST, GAME_PORT), timeout=timeout)
     sock.settimeout(timeout)
-    print(f"[2] 已连 {GAME_HOST}:{GAME_PORT}")
+    _log(f"[2] 已连 {GAME_HOST}:{GAME_PORT}")
 
     tail = open(TAIL_PATH).read().strip()
     body = session + bytes.fromhex(tail)
     sock.sendall(pack(1001, uid, body, Serial(), version=0x31))
-    print(f"[3] 发 LOGIN_IN  {len(pack(1001, uid, body, Serial(), 0x31))}B（重算麻烦，仅显示）")
+    _log(f"[3] 发 LOGIN_IN  {len(pack(1001, uid, body, Serial(), 0x31))}B（重算麻烦，仅显示）")
 
     login_reply = None
     for _ in range(40):
@@ -188,7 +197,7 @@ def login(account: str, password: str, timeout: float = 15.0):
     if echoed != uid:
         raise RuntimeError(f"回包米米号不对: {echoed} != {uid}")
     # ★ result 种子来自登录回包（saixiaoxi receive.py:67-68）
-    print(f"[4] 登录成功  result种子={seed}  回包{len(rbody)}B  米米号={echoed}")
+    _log(f"[4] 登录成功  result种子={seed}  回包{len(rbody)}B  米米号={echoed}")
     return sock, Serial(seed), uid
 
 
@@ -514,14 +523,22 @@ def main():
     if action == "login":
         cmd_login(account, password)
     elif action == "pvp":
-        cmd_pvp(account, password, int(sys.argv[2]) if len(sys.argv) > 2 else 123456789)
+        # ★ 2026-11-23：原来不传参就默认查作者自己的号 —— 那是真实账号，不该留在代码里。
+        #   改成必填：目标米米号跟「用哪个号登录」是两件事，别让它俩耦合。
+        if len(sys.argv) < 3:
+            print("缺目标米米号：python headless.py pvp <米米号>")
+            return 1
+        cmd_pvp(account, password, int(sys.argv[2]))
     elif action == "vote":
         # python headless.py vote [191|192] [sub_key]
         _k = int(sys.argv[2]) if len(sys.argv) > 2 else 191
         _sk = int(sys.argv[3]) if len(sys.argv) > 3 else 0
         cmd_vote(account, password, _sk, _k)
     elif action == "lineup":
-        cmd_lineup(account, password, int(sys.argv[2]) if len(sys.argv) > 2 else 123456789)
+        if len(sys.argv) < 3:
+            print("缺目标米米号：python headless.py lineup <米米号>")
+            return 1
+        cmd_lineup(account, password, int(sys.argv[2]))
     else:
         print(f"未知动作: {action}")
         return 1

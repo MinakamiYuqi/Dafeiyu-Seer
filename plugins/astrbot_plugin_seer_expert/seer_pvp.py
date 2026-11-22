@@ -37,8 +37,13 @@ _HERE = Path(__file__).resolve().parent
 _XM_CANDIDATES = [
     _HERE / "_xm",                        # ① 插件自带（随插件一起复制，运行版走这条）
     _HERE.parent / "_re" / "xm",          # ② 开发工作区
-    Path(r"<workspace>\_re\xm"),     # ③ 工作区绝对路径兜底
 ]
+# ③ 想额外指定一份：设环境变量 SEER_XM_DIR
+#   ★ 2026-11-23：这里原来是写死的 `<workspace>\_re\xm`（作者本机路径）。
+#     别人机器上必然不存在，虽然会被跳过、无害，但没必要把作者目录结构留在代码里。
+_extra_xm = os.environ.get("SEER_XM_DIR", "").strip()
+if _extra_xm:
+    _XM_CANDIDATES.append(Path(_extra_xm))
 
 
 
@@ -100,7 +105,21 @@ def _import_headless():
     return h
 
 
-SEERAPI = _find_astrbot_instance() / "core" / "data" / "plugin_data" / "astrbot_plugin_seer_info" / "seerapi.sqlite"
+_SEERAPI_CACHE: Path | None = None
+
+
+def _seerapi_path() -> Path:
+    """seerapi.sqlite 的绝对路径。
+
+    ★ 惰性求值（2026-11-21 改）：原来这行写在模块顶部，导致任何
+      `import seer_pvp`（比如只想测 rank_display 这种纯函数）都会
+      因为找不到实例目录而 RuntimeError —— 纯函数被迫绑死运行环境。
+    """
+    global _SEERAPI_CACHE
+    if _SEERAPI_CACHE is None:
+        _SEERAPI_CACHE = (_find_astrbot_instance() / "core" / "data" / "plugin_data"
+                          / "astrbot_plugin_seer_info" / "seerapi.sqlite")
+    return _SEERAPI_CACHE
 
 # ── 常量 ─────────────────────────────────────────────────
 PVP_FIELDS = {
@@ -129,12 +148,29 @@ FLAG_STANDBY = 7
 CUR_TITLE_OFFSET = 49
 
 
+#: 圣皇段（rk=4）才是「一胜一颗星」；往下是分数制。
+STAR_FROM_RANK = 4
+
+
 def rank_display(rk: int, star: int) -> str:
-    """圣皇满 100 星显示「宇宙圣皇」，纯装饰。"""
+    """段位展示。★ **单位随段位变**：圣皇用「星」，圣皇以下用「分」。
+
+    2026-11-21 鱼片确认的规则（实测对上了：圣皇 0星 / 宇宙圣皇 161星 / 大师 54分）：
+
+      · 圣皇段：一胜一颗星，所以「星」这个说法只在圣皇以后才成立
+      · 圣皇以下：一胜加 3~5 分，是**分数**不是星
+      · 学徒 / 猛将：输了不扣分（新手保护），所以这两个段的分只涨不跌
+      · 圣皇满 100 星显示「宇宙圣皇」（纯装饰，星数本身可以更大）
+
+    ★ 以前一律输出「X星」，导致低段位显示成「学徒 54星」——那是 54 **分**。
+    """
     name = RANK_NAMES.get(rk, f"段位{rk}")
-    if rk == 4 and star >= 100:
-        name = "宇宙圣皇"
-    return f"{name} {star}星"
+    # 只有「已知段位 + 圣皇以上」才用星；未知段位一律给分，宁保守别乱说
+    if rk in RANK_NAMES and rk >= STAR_FROM_RANK:
+        if star >= 100:
+            name = "宇宙圣皇"
+        return f"{name} {star}星"
+    return f"{name} {star}分"
 
 
 def _creds(account: str | None, password: str | None) -> tuple[str, str]:
@@ -430,7 +466,7 @@ def _resolve_profile(clothes: list[tuple[int, int]], cur_title: int) -> dict:
 
     out: dict = {"suit": None, "extras": [], "title": None}
     try:
-        con = sqlite3.connect("file:" + str(SEERAPI).replace("\\", "/") + "?mode=ro", uri=True)
+        con = sqlite3.connect("file:" + str(_seerapi_path()).replace("\\", "/") + "?mode=ro", uri=True)
     except Exception:
         return out
     try:
@@ -482,7 +518,7 @@ def _resolve_profile(clothes: list[tuple[int, int]], cur_title: int) -> dict:
 def _lookup_factory(roster: dict):
     import sqlite3
 
-    seer = sqlite3.connect("file:" + str(SEERAPI).replace("\\", "/") + "?mode=ro", uri=True)
+    seer = sqlite3.connect("file:" + str(_seerapi_path()).replace("\\", "/") + "?mode=ro", uri=True)
     skin_by_pet = {}
     for p in roster.get("pets") or []:
         sid = int(p.get("skinId") or 0)

@@ -28,13 +28,13 @@ agent 想回答数值问题 → 必须先跑 seer.py → 结果直接可读
 
 ```
 <seer-cli>/../astrbot_plugin_seer_expert
-<workspace>\astrbot_plugin_seer_expert
+<工作区>\astrbot_plugin_seer_expert
 ```
 
 数据目录默认：
 
 ```
-G:\temp\instances\eb74352a-...\core\data\plugin_data
+<AstrBot 实例>\core\data\plugin_data
 ```
 
 **换路径的方式：**

@@ -13,8 +13,8 @@
   改为复用 `_re/audit_tool_docstrings.py` 的 check_file，不复制逻辑。
 
 注意两套目录布局：
-  workspace（<workspace>）  插件在 <root>/astrbot_plugin_seer_*
-  seer-repo（<workspace>\\seer-repo）插件在 <root>/plugins/astrbot_plugin_seer_*
+  workspace 根目录     插件在 <root>/astrbot_plugin_seer_*
+  seer-repo 目录       插件在 <root>/plugins/astrbot_plugin_seer_*
 所以路径要探测，不能写死。
 """
 import importlib.util

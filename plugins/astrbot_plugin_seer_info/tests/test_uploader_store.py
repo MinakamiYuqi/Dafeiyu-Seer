@@ -31,33 +31,33 @@ def check(cond, msg):
 
 # ---- 配置解析 ----
 check(
-    parse_uploader_config("F81DAEACBA6205676130A3271EEDE726") == {"F81DAEACBA6205676130A3271EEDE726": ""},
+    parse_uploader_config("0123456789ABCDEF0123456789ABCDEF") == {"0123456789ABCDEF0123456789ABCDEF": ""},
     "纯 UID",
 )
 check(
-    parse_uploader_config("佑栖=F81DAEACBA6205676130A3271EEDE726")
-    == {"F81DAEACBA6205676130A3271EEDE726": "佑栖"},
+    parse_uploader_config("甲群友=0123456789ABCDEF0123456789ABCDEF")
+    == {"0123456789ABCDEF0123456789ABCDEF": "甲群友"},
     "昵称=UID",
 )
 check(
-    parse_uploader_config("佑栖：F81DAEACBA6205676130A3271EEDE726")["F81DAEACBA6205676130A3271EEDE726"] == "佑栖",
+    parse_uploader_config("甲群友：0123456789ABCDEF0123456789ABCDEF")["0123456789ABCDEF0123456789ABCDEF"] == "甲群友",
     "全角冒号",
 )
 parsed = parse_uploader_config(
-    "佑栖=F81DAEACBA6205676130A3271EEDE726\n霜宝=987086EEA0FF74D90EADA6FFD6EA3B92，某人=ABC123DEF456"
+    "甲群友=0123456789ABCDEF0123456789ABCDEF\n乙群友=FEDCBA9876543210FEDCBA9876543210，某人=ABC123DEF456"
 )
 check(len(parsed) == 3, f"多行/逗号混合（实际 {len(parsed)}）")
-check(parsed.get("987086EEA0FF74D90EADA6FFD6EA3B92") == "霜宝", "第二行昵称")
+check(parsed.get("FEDCBA9876543210FEDCBA9876543210") == "乙群友", "第二行昵称")
 check(parsed.get("ABC123DEF456") == "某人", "全角逗号分隔")
 check(parse_uploader_config("# 注释\n\n") == {}, "注释和空行")
 check(parse_uploader_config("") == {}, "空串")
 
 # ---- 白名单操作 ----
 store = UploaderStore()
-store.load_config("佑栖=F81DAEACBA6205676130A3271EEDE726")
-check(store.contains("F81DAEACBA6205676130A3271EEDE726"), "配置里的 UID 命中")
+store.load_config("甲群友=0123456789ABCDEF0123456789ABCDEF")
+check(store.contains("0123456789ABCDEF0123456789ABCDEF"), "配置里的 UID 命中")
 check(not store.contains("别人"), "不在白名单的不命中")
-check(store.label("F81DAEACBA6205676130A3271EEDE726") == "佑栖（F81DAEACBA6205676130A3271EEDE726）", "标签带昵称")
+check(store.label("0123456789ABCDEF0123456789ABCDEF") == "甲群友（0123456789ABCDEF0123456789ABCDEF）", "标签带昵称")
 
 check(store.add("NEWUID123456", "新人"), "添加新成员")
 check(store.contains("NEWUID123456"), "添加后命中")
@@ -78,7 +78,7 @@ check(top[0].uid == "A1" and top[1].uid == "B2", "按次数排序")
 with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / "nested" / "uploaders.json"
     s1 = UploaderStore(path=path)
-    s1.load_config("佑栖=F81DAEACBA6205676130A3271EEDE726")
+    s1.load_config("甲群友=0123456789ABCDEF0123456789ABCDEF")
     s1.touch("A1", "甲")
     s1.add("MANUAL1", "手动")
     s1.save()
@@ -88,10 +88,10 @@ with tempfile.TemporaryDirectory() as tmp:
     s2.load()
     check(s2.contains("MANUAL1"), "手动加的白名单能恢复")
     check(s2.candidates["A1"].count == 1, "候选池能恢复")
-    s2.load_config("霜宝=987086EEA0FF74D90EADA6FFD6EA3B92")
-    check(s2.contains("987086EEA0FF74D90EADA6FFD6EA3B92"), "配置条目加载")
+    s2.load_config("乙群友=FEDCBA9876543210FEDCBA9876543210")
+    check(s2.contains("FEDCBA9876543210FEDCBA9876543210"), "配置条目加载")
     check(s2.contains("MANUAL1"), "配置加载不清掉手动条目")
-    check(s2.members["987086EEA0FF74D90EADA6FFD6EA3B92"] == "霜宝", "配置昵称生效")
+    check(s2.members["FEDCBA9876543210FEDCBA9876543210"] == "乙群友", "配置昵称生效")
 
 # ---- 候选池上限 ----
 big = UploaderStore()

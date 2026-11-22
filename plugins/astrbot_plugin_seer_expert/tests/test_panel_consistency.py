@@ -61,10 +61,14 @@ def test_hpup_default_is_consistent():
 
 
 def test_hpup_actually_applies(k):
-    """传 hpup 必须真的影响面板（否则又是一个「参数声明了但没用」）。"""
+    """传 hpup 必须真的影响面板（否则又是一个「参数声明了但没用」）。
+
+    ★ 必须传 soulmod="无"：无为觉者是「总和均分」型，派生一开，
+      +20 的体力会被 ×3 放大成 60，量到的不再是 hpup 本身的效果。
+    """
     kw = dict(talent=31, nature="勇敢", ev="atk=254,hp=252,spd=4",
               mints=["赤洲龙子·螭吻", "赤洲龙子·螭吻", "帝皇·无极"],
-              suit="圣芒", title="星光之旅", eye="漫游者-AH")
+              suit="圣芒", title="星光之旅", eye="漫游者-AH", soulmod="无")
     a = _stat_total(k, "无为觉者", hpup=20, **kw)
     b = _stat_total(k, "无为觉者", hpup=0, **kw)
     assert a - b == 20, f"hpup 20 vs 0 的差值应正好 20，实际 {a - b}"
@@ -72,7 +76,7 @@ def test_hpup_actually_applies(k):
 
 def test_build_respects_explicit_params(k):
     """build_view 里用户传的套装/称号/目镜不能被 pet_build 表里的记录盖掉。"""
-    v = k.build_view("无为觉者", "爆攻", suit="圣芒", title="星光之旅", eye="漫游者-AH")
+    v = k.build_view("无为觉者", suit="圣芒", title="星光之旅", eye="漫游者-AH")
     if not v.get("found"):
         pytest.skip("无为觉者 库里没有")
     assert v.get("suit") == "圣芒", f"套装被覆盖成 {v.get('suit')!r}"
@@ -80,7 +84,7 @@ def test_build_respects_explicit_params(k):
     assert v.get("eye") == "漫游者-AH", f"目镜被覆盖成 {v.get('eye')!r}"
 
     # 不传时应该回落到 pet_build 的记录（无为觉者存的是晨曦/神话/AH）
-    v2 = k.build_view("无为觉者", "爆攻")
+    v2 = k.build_view("无为觉者")
     assert v2.get("suit") and v2.get("suit") != "圣芒", "不传时应回落到表里的配装"
 
 
