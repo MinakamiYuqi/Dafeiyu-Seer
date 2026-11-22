@@ -445,8 +445,8 @@ class SeerExpertPlugin(Star):
             logger.debug(f"[自动登录] 异常：{exc}")
 
     # ---------------- 平台守护：NapCat 掉线自动重登 ----------------
-    _NAPCAT_DIR = r"G:\bot\napcat"
-    _NAPCAT_LOGDIR = r"G:\bot\logs"
+    _NAPCAT_DIR = r"G:\bot相关\napcat"
+    _NAPCAT_LOGDIR = r"G:\bot相关\logs"
     _ONEBOT_PORT = 6199
 
     async def _ws_connected(self) -> bool:
@@ -6345,7 +6345,7 @@ Args:
         # 不需要用 @ 当门槛（模型不会因为别人的指令就乱调）。
         acc, pwd = self._seer_creds()
         if not acc or not pwd:
-            return "查询失败：服务账号没配。请在插件配置里填 seer_account / seer_password。"
+            return "查询失败：服务账号没配。填插件配置 seer_account / seer_password，或设环境变量 SEER_ACCOUNT / SEER_PASSWORD。"
         try:
             target = int(str(account).strip())
         except (TypeError, ValueError):
@@ -6390,7 +6390,7 @@ Args:
         # 不需要用 @ 当门槛（模型不会因为别人的指令就乱调）。
         acc, pwd = self._seer_creds()
         if not acc or not pwd:
-            return "查询失败：服务账号没配。请在插件配置里填 seer_account / seer_password。"
+            return "查询失败：服务账号没配。填插件配置 seer_account / seer_password，或设环境变量 SEER_ACCOUNT / SEER_PASSWORD。"
         try:
             target = int(str(account).strip())
         except (TypeError, ValueError):
@@ -6445,7 +6445,7 @@ Args:
         """
         acc, pwd = self._seer_creds()
         if not acc or not pwd:
-            return "查询失败：服务账号没配。请在插件配置里填 seer_account / seer_password。"
+            return "查询失败：服务账号没配。填插件配置 seer_account / seer_password，或设环境变量 SEER_ACCOUNT / SEER_PASSWORD。"
         try:
             target = int(str(account).strip())
         except (TypeError, ValueError):
@@ -7051,7 +7051,7 @@ Args:
             _pwd = (os.environ.get("SEER_PASSWORD") or "").strip()
         if not _acc or not _pwd:
             return None, {"error": "缺账号"}, (
-                "查投票需要赛尔号小号：请在插件配置里填 seer_account / seer_password。\n"
+                "查投票需要赛尔号小号：填插件配置 seer_account / seer_password，或设环境变量 SEER_ACCOUNT / SEER_PASSWORD。\n"
                 "（同一个米米号只能一个人在线，建议用专用小号）"
             )
         data = await probe_latest(key, account=_acc, password=_pwd)
